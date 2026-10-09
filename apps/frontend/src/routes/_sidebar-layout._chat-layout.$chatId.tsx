@@ -103,7 +103,10 @@ function ChatPage() {
 	const onboardingWarehouseJobId = useAgentMessagesSelector(findWarehouseJobId);
 	const onboardingWarehouseJob = useWarehouseProvisioningJob(onboardingWarehouseJobId);
 	const showTrialOnboardingBanner =
-		currentProject.isSuccess && currentProject.data === null && !chat.data?.isOnboarding;
+		config.data?.naoMode === 'cloud' &&
+		currentProject.isSuccess &&
+		currentProject.data === null &&
+		!chat.data?.isOnboarding;
 	const isExampleChat = chat.data?.projectId === SYSTEM_EXAMPLE_PROJECT_ID;
 	const isInMultipleProjects = (projects.data?.length ?? 0) > 1;
 	const chatProject = isInMultipleProjects ? projects.data?.find((p) => p.id === chat.data?.projectId) : undefined;
@@ -185,12 +188,12 @@ function ChatPage() {
 						className='flex flex-col h-full flex-1 min-w-0 overflow-hidden justify-center relative'
 						style={{ '--chat-input-height': `${inputAreaHeight}px` } as React.CSSProperties}
 					>
-						<MobileHeader chatId={chatId} title={title} automationId={automationId} />
-						{isExampleChat && !chat.data?.isOnboarding && (
-							<div className='absolute left-3 top-14 z-20 w-[calc(100%-1.5rem)] max-w-xs md:left-4'>
-								<ExampleProjectInfoCard />
-							</div>
-						)}
+						<MobileHeader
+							chatId={chatId}
+							title={title}
+							automationId={automationId}
+							showExampleProjectInfo={isExampleChat && !chat.data?.isOnboarding}
+						/>
 
 						<div className='group/header absolute flex items-center justify-between top-3 inset-x-4 z-10 max-md:hidden'>
 							<div className='min-w-0 max-w-[60%] flex flex-row gap-4'>
@@ -244,6 +247,7 @@ function ChatPage() {
 								)}
 							</div>
 							<div className='flex items-center justify-end gap-2'>
+								{isExampleChat && !chat.data?.isOnboarding && <ExampleProjectInfoCard compact />}
 								<Button
 									variant='ghost'
 									size='icon-sm'

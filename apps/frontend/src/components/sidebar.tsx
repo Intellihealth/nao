@@ -7,6 +7,7 @@ import {
 	NewspaperIcon,
 	PlusIcon,
 	SearchIcon,
+	OctagonAlert,
 	Store,
 	X,
 } from 'lucide-react';
@@ -62,6 +63,7 @@ export function Sidebar() {
 	const isCloud = useIsCloud();
 	const hasActiveProject = project.isSuccess && project.data !== null;
 	const showJaffleShopTab = isCloud && hasActiveProject;
+	const showProjectSetupCard = isCloud && project.isSuccess && project.data === null && !isViewer;
 	const betaAutomationsEnabled = config.data?.betaAutomationsEnabled === true;
 	const showAutomations = !isViewer && betaAutomationsEnabled;
 	const unreadCount = useUnreadCount(project.data?.id).data ?? 0;
@@ -298,6 +300,7 @@ export function Sidebar() {
 
 			{!isInSettings && showJaffleShopTab && (
 				<JaffleShopHistory
+					isViewer={isViewer}
 					isCollapsed={effectiveIsCollapsed}
 					isOpen={showExampleHistory}
 					groupBy={groupBy}
@@ -305,7 +308,12 @@ export function Sidebar() {
 					onToggle={() => setShowExampleHistory((isOpen) => !isOpen)}
 				/>
 			)}
-			{!isInSettings && <div className='border-b border-sidebar-border mx-2'></div>}
+			{showProjectSetupCard && !effectiveIsCollapsed && (
+				<div className='px-2'>
+					<SidebarProjectSetupCard />
+				</div>
+			)}
+			{(!isInSettings || showProjectSetupCard) && <div className='border-b border-sidebar-border mx-2'></div>}
 
 			<div className={cn('mt-auto transition-[padding] duration-300', effectiveIsCollapsed ? 'p-1' : 'p-2')}>
 				{isInSettings && <SidebarCommunity isCollapsed={effectiveIsCollapsed} />}
@@ -332,6 +340,20 @@ export function Sidebar() {
 	}
 
 	return sidebarContent;
+}
+
+function SidebarProjectSetupCard() {
+	return (
+		<Link
+			to='/onboarding'
+			className='mb-2 flex min-h-14 w-full items-center justify-center rounded-xl border border-amber-300/60 bg-amber-50/70 px-3 py-2.5 text-center transition-colors hover:border-amber-400/70 hover:bg-amber-100/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 dark:border-amber-300/20 dark:bg-amber-300/5 dark:hover:border-amber-300/30 dark:hover:bg-amber-300/10'
+		>
+			<span className='font-borna flex items-center justify-center gap-2 text-sm font-medium leading-tight text-amber-950 dark:text-amber-100'>
+				<OctagonAlert className='size-4 shrink-0 text-amber-600 dark:text-amber-300' />
+				Finish setting up your project
+			</span>
+		</Link>
+	);
 }
 
 function SidebarMenuButton({
@@ -448,19 +470,20 @@ function SidebarNav({
 		refetchOnWindowFocus: 'always',
 	});
 	const onboardingNeedsAttention = activeOnboardingJob.data?.status === 'awaiting_context';
-	const groups = groupedChats.data?.groups.map((group) => {
-		if (!separateExampleChats) {
-			return group;
-		}
-		return {
-			...group,
-			chats: group.chats.filter((chat) => chat.projectId !== SYSTEM_EXAMPLE_PROJECT_ID || chat.isOnboarding),
-		};
-	});
-	const showAttentionChat =
-		onboardingNeedsAttention &&
-		onboardingChat &&
-		!groups?.some((group) => group.chats.some((chat) => chat.id === onboardingChat.id));
+
+	const groups = groupedChats.data?.groups.map((group) => ({
+		...group,
+		chats: group.chats.filter((chat) => {
+			const belongsInMainHistory =
+				!separateExampleChats || chat.projectId !== SYSTEM_EXAMPLE_PROJECT_ID || chat.isOnboarding;
+
+			const isPinnedAttentionChat = onboardingNeedsAttention && chat.id === onboardingChatId;
+
+			return belongsInMainHistory && !isPinnedAttentionChat;
+		}),
+	}));
+
+	const showAttentionChat = onboardingNeedsAttention ? onboardingChat : undefined;
 	const isEmpty = !showAttentionChat && groups?.every((group) => group.chats.length === 0);
 	const { data: session } = useSession();
 	const username = session?.user?.name;
@@ -473,7 +496,7 @@ function SidebarNav({
 		>
 			{showAttentionChat && (
 				<div className='px-2 space-y-1'>
-					<ChatListItem chat={onboardingChat} needsAttention resumeOnboarding={isTrial} />
+					<ChatListItem chat={showAttentionChat} needsAttention resumeOnboarding={isTrial} />
 				</div>
 			)}
 			{groups?.map((group) => (
@@ -512,12 +535,14 @@ function SidebarNav({
 }
 
 function JaffleShopHistory({
+	isViewer,
 	isCollapsed,
 	isOpen,
 	groupBy,
 	filters,
 	onToggle,
 }: {
+	isViewer: boolean;
 	isCollapsed: boolean;
 	isOpen: boolean;
 	groupBy: ChatGroupBy;
@@ -555,14 +580,16 @@ function JaffleShopHistory({
 			</button>
 			{isOpen && (
 				<div className='max-h-56 overflow-y-auto border-t border-sidebar-border bg-sidebar py-1 text-foreground'>
-					<Link
-						to='/'
-						search={{ example: true }}
-						className='mx-2 flex items-center gap-2 rounded-full px-2 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-sidebar-accent'
-					>
-						<PlusIcon className='size-3.5' />
-						New chat
-					</Link>
+					{!isViewer && (
+						<Link
+							to='/'
+							search={{ example: true }}
+							className='mx-2 flex items-center gap-2 rounded-full px-2 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-sidebar-accent'
+						>
+							<PlusIcon className='size-3.5' />
+							New chat
+						</Link>
+					)}
 					{groups?.map((group) => (
 						<GroupSection key={group.label} group={group} groupBy={groupBy} storageNamespace='example' />
 					))}

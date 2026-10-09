@@ -7,7 +7,7 @@ import type { StoryItem } from '@/lib/stories-page';
 
 import { ChatInput } from '@/components/chat-input';
 import { ChatMessages } from '@/components/chat-messages/chat-messages';
-import { ExampleProjectInfoCard } from '@/components/example-project-info-card';
+import { ExampleProjectInfoCard, ExampleProjectPromptCard } from '@/components/example-project-info-card';
 import { SavedPromptSuggestions } from '@/components/chat-saved-prompt-suggestions';
 import { MobileHeader } from '@/components/mobile-header';
 import { ProjectSwitcher } from '@/components/project-selector';
@@ -137,10 +137,10 @@ function HomePage() {
 
 	return (
 		<div className='relative flex flex-col h-full flex-1 min-w-72 overflow-hidden justify-center'>
-			<MobileHeader />
+			<MobileHeader showExampleProjectInfo={showExampleProject} />
 			{showExampleProject && (
-				<div className='absolute left-3 top-14 z-20 w-[calc(100%-1.5rem)] max-w-xs md:left-4'>
-					<ExampleProjectInfoCard />
+				<div className='group/header absolute right-4 top-3 z-20 max-md:hidden'>
+					<ExampleProjectInfoCard compact />
 				</div>
 			)}
 			{messages.length === 0 &&
@@ -193,11 +193,11 @@ function HomePage() {
 										aria-hidden
 										className='pointer-events-none absolute -top-60 left-1/2 -translate-x-1/2 w-full max-w-2xl select-none -z-10'
 									/>
-									<ChatInput variant='example' />
+									<ChatInput />
 									<SavedPromptSuggestions />
 								</div>
 								{showProjectSetupCue && (
-									<div className='flex w-full max-w-3xl justify-center px-4 py-6'>
+									<div className='grid w-full max-w-3xl grid-cols-1 gap-4 px-4 py-6 sm:grid-cols-2'>
 										<HomeLinkCard
 											to='/onboarding'
 											label='Guided setup'
@@ -205,6 +205,7 @@ function HomePage() {
 											subtitle='Chat with the onboarding agent'
 											logoSrc={cardLogoSrc}
 										/>
+										<ExampleProjectPromptCard />
 									</div>
 								)}
 							</>

@@ -159,6 +159,7 @@ vi.mock('../src/utils/project-import.utils', () => ({
 }));
 vi.mock('../src/services/managed-github-repository', () => ({
 	deleteManagedGithubRepository: vi.fn(),
+	getManagedGithubRepositoryFullName: vi.fn(() => 'nao-org/nao-analytics-owned-project'),
 	provisionManagedGithubRepository: vi.fn(),
 }));
 vi.mock('../src/services/onboarding-rules', () => ({
@@ -181,8 +182,10 @@ import { spawn } from 'node:child_process';
 
 import * as projectQueries from '../src/queries/project.queries';
 import * as scheduledJobQueries from '../src/queries/scheduled-job.queries';
+import * as warehouseProvisioningJobQueries from '../src/queries/warehouse-provisioning-job.queries';
 import {
 	deleteManagedGithubRepository,
+	getManagedGithubRepositoryFullName,
 	provisionManagedGithubRepository,
 } from '../src/services/managed-github-repository';
 import { generateOnboardingRules } from '../src/services/onboarding-rules';
@@ -351,6 +354,12 @@ describe('warehouse provisioning', () => {
 		await vi.waitFor(async () => {
 			expect((await getWarehouseProvisioningJob(jobId, 'user-1'))?.status).toBe('failed');
 		});
+		const [creationInput] = vi.mocked(createNewProject).mock.calls[0];
+		expect(creationInput.projectId).toEqual(expect.any(String));
+		expect(warehouseProvisioningJobQueries.updateWarehouseProvisioningJob).toHaveBeenCalledWith(jobId, {
+			status: 'registering',
+			projectId: creationInput.projectId,
+		});
 		expect(scheduledJobQueries.deleteJobByUniqueKey).toHaveBeenCalledWith('context.recommendations:project-1');
 		expect(projectQueries.deleteProject).toHaveBeenCalledWith('project-1');
 		expect(fs.existsSync(registeredProjectDirectory)).toBe(false);
@@ -484,6 +493,7 @@ describe('warehouse provisioning', () => {
 		await vi.waitFor(async () => {
 			expect((await getWarehouseProvisioningJob(jobId, 'user-1'))?.status).toBe('awaiting_context');
 		});
+		expect(warehouseJobs.get(jobId)?.attempts).toBe(0);
 		expect(registeredConfig).toContain("env('NAO_ONBOARDING_POSTGRES_PASSWORD')");
 		expect(registeredConfig).not.toContain('super-secret');
 		fs.rmSync(registeredProjectDirectory, { recursive: true, force: true });
@@ -543,6 +553,117 @@ describe('warehouse provisioning', () => {
 		expect((await getWarehouseProvisioningJob(jobId, 'user-1'))?.status).toBe('awaiting_context');
 		expect(spawn).toHaveBeenCalledTimes(2);
 		fs.rmSync(registeredProjectDirectory, { recursive: true, force: true });
+	});
+
+	it('fails an abandoned job after its retry budget is exhausted', async () => {
+		vi.useFakeTimers();
+		const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'warehouse-onboarding-exhausted-'));
+		const { jobId } = await startWarehouseProvisioning({
+			userId: 'user-1',
+			orgId: 'org-1',
+			name: 'analytics',
+			provider: 'postgres',
+			credentials: { host: 'warehouse.example.com', password: 'secret' },
+		});
+		const job = warehouseJobs.get(jobId);
+		if (!job) {
+			throw new Error('Expected provisioning job');
+		}
+		warehouseJobs.set(jobId, {
+			...job,
+			status: 'syncing',
+			attempts: 5,
+			temporaryDirectory,
+		});
+
+		await reconcileWarehouseProvisioningJobs();
+
+		expect(warehouseJobs.get(jobId)).toMatchObject({
+			status: 'failed',
+			attempts: 5,
+			encryptedCredentials: null,
+			temporaryDirectory: null,
+			error: 'Warehouse setup stopped unexpectedly several times. Please try again.',
+		});
+		expect(fs.existsSync(temporaryDirectory)).toBe(false);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	it('deletes the managed repository when an abandoned publishing job exhausts its retry budget', async () => {
+		vi.useFakeTimers();
+		const { jobId } = await startWarehouseProvisioning({
+			userId: 'user-1',
+			orgId: 'org-1',
+			name: 'analytics',
+			provider: 'postgres',
+			credentials: { host: 'warehouse.example.com', password: 'secret' },
+		});
+		const job = warehouseJobs.get(jobId);
+		if (!job) {
+			throw new Error('Expected provisioning job');
+		}
+		warehouseJobs.set(jobId, {
+			...job,
+			status: 'publishing',
+			attempts: 5,
+			projectId: 'owned-project',
+			encryptedCredentials: null,
+		});
+		vi.mocked(projectQueries.deleteProject).mockResolvedValue();
+		vi.mocked(scheduledJobQueries.deleteJobByUniqueKey).mockResolvedValue();
+
+		await reconcileWarehouseProvisioningJobs();
+
+		expect(getManagedGithubRepositoryFullName).toHaveBeenCalledWith({
+			projectId: 'owned-project',
+			projectName: 'analytics',
+		});
+		expect(deleteManagedGithubRepository).toHaveBeenCalledWith('nao-org/nao-analytics-owned-project');
+		expect(warehouseJobs.get(jobId)?.status).toBe('failed');
+	});
+
+	it('only rolls back the project ID owned by a recovering registration job', async () => {
+		vi.useFakeTimers();
+		const ownedProjectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'registered-project-owned-'));
+		const otherProjectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'registered-project-other-'));
+		const { jobId } = await startWarehouseProvisioning({
+			userId: 'user-1',
+			orgId: 'org-1',
+			name: 'analytics',
+			provider: 'postgres',
+			credentials: { host: 'warehouse.example.com', password: 'secret' },
+		});
+		const job = warehouseJobs.get(jobId);
+		if (!job) {
+			throw new Error('Expected provisioning job');
+		}
+		warehouseJobs.set(jobId, {
+			...job,
+			status: 'registering',
+			projectId: 'owned-project',
+			encryptedCredentials: null,
+		});
+		vi.mocked(projectQueries.getProjectById).mockResolvedValue({
+			id: 'owned-project',
+			name: 'analytics',
+			path: ownedProjectDirectory,
+		} as never);
+		vi.mocked(projectQueries.getProjectByOrgAndName).mockResolvedValue({
+			id: 'other-project',
+			name: 'analytics',
+			path: otherProjectDirectory,
+		} as never);
+		vi.mocked(projectQueries.deleteProject).mockResolvedValue();
+		vi.mocked(scheduledJobQueries.deleteJobByUniqueKey).mockResolvedValue();
+
+		await reconcileWarehouseProvisioningJobs();
+
+		expect(projectQueries.deleteProject).toHaveBeenCalledWith('owned-project');
+		expect(projectQueries.deleteProject).not.toHaveBeenCalledWith('other-project');
+		expect(projectQueries.getProjectByOrgAndName).not.toHaveBeenCalled();
+		expect(fs.existsSync(ownedProjectDirectory)).toBe(false);
+		expect(fs.existsSync(otherProjectDirectory)).toBe(true);
+		fs.rmSync(otherProjectDirectory, { recursive: true, force: true });
 	});
 
 	it('resumes abandoned finalization from its persisted context', async () => {

@@ -10,6 +10,7 @@ import { NAO_CO_AUTHOR } from '../utils/git-identity';
 import { getGitOAuthCredential, runGitWithOAuthAsync } from '../utils/git-oauth';
 
 const GITHUB_API = 'https://api.github.com';
+const GITHUB_API_TIMEOUT_MS = 30_000;
 const GITHUB_AUTH_RETRY_DELAY_MS = 1_000;
 
 interface ManagedRepositoryInput {
@@ -34,6 +35,7 @@ interface ManagedGithubConfig {
 interface GithubRepository {
 	full_name: string;
 	html_url: string;
+	private: boolean;
 }
 
 interface ManagedGithubRepository {
@@ -95,6 +97,14 @@ export async function deleteManagedGithubRepository(repoFullName: string): Promi
 	await deleteRepository(repoFullName, token);
 }
 
+export function getManagedGithubRepositoryFullName({
+	projectId,
+	projectName,
+}: Pick<ManagedRepositoryInput, 'projectId' | 'projectName'>): string | null {
+	const org = env.CLOUD_GITHUB_PROJECT_ORG;
+	return org ? `${org}/${buildRepositoryName(projectName, projectId)}` : null;
+}
+
 function getManagedGithubConfig(): ManagedGithubConfig | null {
 	const values = [
 		env.CLOUD_GITHUB_PROJECT_ORG,
@@ -133,7 +143,7 @@ async function createInstallationToken(config: ManagedGithubConfig): Promise<str
 		.setExpirationTime(now + 9 * 60)
 		.sign(key);
 
-	const response = await fetch(`${GITHUB_API}/app/installations/${config.installationId}/access_tokens`, {
+	const response = await githubFetch(`/app/installations/${config.installationId}/access_tokens`, {
 		method: 'POST',
 		headers: githubHeaders(jwt),
 	});
@@ -149,10 +159,13 @@ async function createInstallationToken(config: ManagedGithubConfig): Promise<str
 async function getOrCreateRepository(org: string, repoName: string, token: string): Promise<ManagedGithubRepository> {
 	const existing = await getRepository(org, repoName, token);
 	if (existing) {
+		if (!existing.private) {
+			throw new Error(`Refusing to use public managed repository: ${existing.full_name}`);
+		}
 		return { repository: existing, created: false };
 	}
 
-	const response = await fetch(`${GITHUB_API}/orgs/${org}/repos`, {
+	const response = await githubFetch(`/orgs/${org}/repos`, {
 		method: 'POST',
 		headers: githubHeaders(token),
 		body: JSON.stringify({
@@ -174,7 +187,7 @@ async function getOrCreateRepository(org: string, repoName: string, token: strin
 }
 
 async function getRepository(org: string, repoName: string, token: string): Promise<GithubRepository | null> {
-	const response = await fetch(`${GITHUB_API}/repos/${org}/${repoName}`, {
+	const response = await githubFetch(`/repos/${org}/${repoName}`, {
 		headers: githubHeaders(token),
 	});
 
@@ -190,13 +203,31 @@ async function getRepository(org: string, repoName: string, token: string): Prom
 }
 
 async function deleteRepository(repoFullName: string, token: string): Promise<void> {
-	const response = await fetch(`${GITHUB_API}/repos/${repoFullName}`, {
+	const response = await githubFetch(`/repos/${repoFullName}`, {
 		method: 'DELETE',
 		headers: githubHeaders(token),
 	});
 
+	if (response.status === 404) {
+		return;
+	}
+
 	if (!response.ok) {
 		throw new Error(`Failed to delete repository: ${response.status}`);
+	}
+}
+
+async function githubFetch(pathname: string, init: RequestInit): Promise<Response> {
+	try {
+		return await fetch(`${GITHUB_API}${pathname}`, {
+			...init,
+			signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
+		});
+	} catch (error) {
+		if (error instanceof Error && error.name === 'TimeoutError') {
+			throw new Error('GitHub API request timed out. Please try again.', { cause: error });
+		}
+		throw error;
 	}
 }
 
@@ -322,7 +353,7 @@ function buildRepositoryName(projectName: string, projectId: string): string {
 			.replace(/[^a-z0-9]+/g, '-')
 			.replace(/^-|-$/g, '')
 			.slice(0, 75) || 'project';
-	return `nao-${slug}-${projectId.slice(0, 8)}`;
+	return `nao-${slug}-${projectId.slice(0, 16)}`;
 }
 
 function githubHeaders(token: string): Record<string, string> {

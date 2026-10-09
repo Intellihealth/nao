@@ -153,7 +153,7 @@ export const SQL_PROVIDER_SETTINGS: Record<SqlProvider, SqlProviderSettings> = {
 };
 
 export function isSqlProvider(provider: requestWarehouseCredentials.Provider): provider is SqlProvider {
-	return provider in SQL_PROVIDER_SETTINGS;
+	return Object.prototype.hasOwnProperty.call(SQL_PROVIDER_SETTINGS, provider);
 }
 
 export function providerHasField(provider: SqlProvider, field: WarehouseCredentialField): boolean {

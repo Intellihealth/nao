@@ -10,7 +10,7 @@ import { mcpService } from '../services/mcp';
 import { skillService } from '../services/skill';
 import type { StorageScope } from '../services/storage';
 import { statUserFile } from '../services/storage/user-files';
-import { AgentRequest, AgentRequestUserMessage, MessageSource, TokenUsage, UIMessagePart } from '../types/chat';
+import { AgentRequest, AgentRequestUserMessage, MessageSource, UIMessagePart } from '../types/chat';
 import { createChatTitle } from '../utils/ai';
 import { HandlerError } from '../utils/error';
 import { buildImageUrl } from '../utils/image';
@@ -19,7 +19,6 @@ import { isStoragePath, toStorageRelativePath, toStorageVirtualPath } from '../u
 interface HandleAgentMessageInput extends AgentRequest {
 	userId: string;
 	projectId: string | undefined;
-	onFinish?: (usage: TokenUsage) => Promise<void> | void;
 	projectAccessAlreadyAuthorized?: boolean;
 }
 
@@ -99,7 +98,7 @@ export const handleAgentRoute = async (opts: HandleAgentMessageInput): Promise<H
 	const stream = agent.stream(chat.messages, {
 		mentions,
 		timezone: opts.timezone,
-		onFinish: opts.onFinish,
+		source: mode === 'onboarding' ? source : undefined,
 		events: {
 			newChat: shouldEmitNewChat
 				? {

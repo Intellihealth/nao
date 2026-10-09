@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { isOnboardingComplete } from './onboarding-progress';
+import { getCompletedSteps, isOnboardingComplete } from './onboarding-progress';
 
 vi.mock('@/main', () => ({ trpc: {} }));
 
@@ -19,4 +19,20 @@ describe('isOnboardingComplete', () => {
 			expect(isOnboardingComplete(hasProject, progress, warehouseReady)).toBe(expected);
 		},
 	);
+});
+
+describe('getCompletedSteps', () => {
+	it.each([
+		[undefined, 0],
+		['queued', 1],
+		['initializing', 1],
+		['syncing', 2],
+		['registering', 3],
+		['awaiting_context', 3],
+		['finalizing', 3],
+		['publishing', 3],
+		['ready', 4],
+	] as const)('tracks database provisioning status %s', (status, expected) => {
+		expect(getCompletedSteps({ flow: 'database', step: 0 }, 4, false, status)).toBe(expected);
+	});
 });

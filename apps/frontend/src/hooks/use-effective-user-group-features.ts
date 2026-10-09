@@ -7,13 +7,15 @@ import { useIsCloud } from '@/hooks/use-nao-mode';
 import { getActiveProjectId } from '@/lib/active-project';
 import { getRenderableUserGroupAccess } from '@/lib/effective-user-group-features';
 import { trpc } from '@/main';
+import { useOptionalAgentContext } from '@/contexts/agent.provider';
 
 export function useEffectiveUserGroupFeatures() {
 	const project = useQuery(trpc.project.getCurrent.queryOptions());
 	const isCloud = useIsCloud();
 	const activeProjectId = getActiveProjectId();
 	const hasCurrentProject = Boolean(project.data?.id) && (!activeProjectId || project.data?.id === activeProjectId);
-	const isExampleProject = isCloud && project.isSuccess && project.data === null;
+	const isOnboarding = useOptionalAgentContext()?.mode === 'onboarding';
+	const isExampleProject = isCloud && project.isSuccess && project.data === null && !isOnboarding;
 	const query = useQuery({
 		...trpc.userGroup.effectiveAccess.queryOptions(),
 		enabled: hasCurrentProject,

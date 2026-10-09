@@ -40,6 +40,7 @@ import {
 	ForkMetadata,
 	Mention,
 	MessageCustomDataParts,
+	MessageSource,
 	TokenCost,
 	TokenUsage,
 	UIMessage,
@@ -65,7 +66,6 @@ import {
 	resolveProviderSettings,
 } from '../utils/llm';
 import { logger } from '../utils/logger';
-import { serializeError } from '../utils/logger';
 import { sanitizeToolCallIds } from '../utils/model-message';
 import { extractConfiguredDatabases, readProjectContext } from '../utils/nao-config';
 import { addPromptCache, cachedSystemInstructions } from '../utils/prompt-cache';
@@ -564,7 +564,7 @@ class AgentManager {
 			provider?: Provider;
 			timezone?: string;
 			chatUrl?: string;
-			onFinish?: (usage: TokenUsage) => Promise<void> | void;
+			source?: MessageSource;
 		} = {},
 	): ReadableStream<InferUIMessageChunk<UIMessage>> {
 		let error: unknown = undefined;
@@ -636,24 +636,13 @@ class AgentManager {
 						...settledMessage,
 						chatId: this.chat.id,
 						senderUserId: this.chat.userId,
-						source: this._toolContext.adminMode ? 'admin' : settledMessage.source,
+						source: opts.source ?? (this._toolContext.adminMode ? 'admin' : settledMessage.source),
 						stopReason,
 						error,
 						tokenUsage,
 						llmProvider: this._modelSelection.provider,
 						llmModelId: this._modelSelection.modelId,
 					});
-					if (tokenUsage) {
-						try {
-							await opts.onFinish?.(tokenUsage);
-						} catch (err) {
-							logger.error('Agent onFinish callback failed', {
-								source: 'agent',
-								projectId: this.chat.projectId,
-								context: { error: serializeError(err), chatId: this.chat.id },
-							});
-						}
-					}
 				} finally {
 					this._finish();
 				}

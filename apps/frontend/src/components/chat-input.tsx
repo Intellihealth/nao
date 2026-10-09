@@ -46,7 +46,7 @@ import { runWithStoryBeforeAgentSend, useStoryBeforeAgentSend } from '@/contexts
 
 const cycleModelShortcut = getShortcut('cycle-model').shortcut;
 
-type ChatInputVariant = 'default' | 'example' | 'onboarding';
+type ChatInputVariant = 'default' | 'onboarding';
 
 type ChatInputBaseProps = {
 	promptRef: React.RefObject<PromptHandle | null>;
@@ -413,13 +413,7 @@ function ChatInputBase({
 					isHidden={inputText.trim().length > 0}
 				/>
 			)}
-			{isAdminMode ? (
-				<ChatInputAdminBadge />
-			) : variant === 'example' ? (
-				<ChatInputExampleBadge />
-			) : variant === 'onboarding' ? (
-				<ChatInputOnboardingBadge />
-			) : null}
+			{isAdminMode ? <ChatInputAdminBadge /> : variant === 'onboarding' ? <ChatInputOnboardingBadge /> : null}
 
 			<form onSubmit={handleSubmitMessage} onKeyDown={handleKeyDown} className='mx-auto relative'>
 				<InputGroup
@@ -428,8 +422,7 @@ function ChatInputBase({
 						'bg-background dark:bg-background shadow-xs border-none max-md:rounded-4xl',
 						isDragging && 'ring-2 ring-primary/50 border-primary',
 						isAdminMode && 'ring-4 ring-amber-500/60',
-						variant === 'example' && 'ring-4 ring-violet/60',
-						variant === 'onboarding' && 'ring-4 ring-foreground/10',
+						!isAdminMode && variant === 'onboarding' && 'ring-4 ring-foreground/10',
 					)}
 				>
 					{!isAdminMode && variant === 'default' && <ChatInputAnimatedBorder />}
@@ -440,11 +433,7 @@ function ChatInputBase({
 					/>
 					<ChatPrompt
 						promptRef={promptRef}
-						placeholder={
-							variant === 'example'
-								? 'Try asking: "Make a pie chart of my sales data."'
-								: effectivePlaceholder
-						}
+						placeholder={effectivePlaceholder}
 						storyCreationEnabled={storyCreationEnabled}
 						onChange={(value) => setInputText(value)}
 						onEnter={(value, mentions) => submitMessage(value, mentions)}
@@ -645,16 +634,6 @@ function ChatInputAdminBadge() {
 					Admin Mode
 				</span>
 			</SimpleTooltip>
-		</div>
-	);
-}
-
-function ChatInputExampleBadge() {
-	return (
-		<div className='flex justify-end pr-4'>
-			<span className='mb-1 flex w-fit items-center rounded-t-lg bg-violet/60 px-2 py-0.5 text-[10px] font-medium text-primary-foreground'>
-				Example
-			</span>
 		</div>
 	);
 }

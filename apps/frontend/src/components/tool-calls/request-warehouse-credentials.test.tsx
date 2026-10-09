@@ -9,6 +9,9 @@ import type { ToolCallComponentProps } from '.';
 const mocks = vi.hoisted(() => ({
 	isRunning: true,
 	jobStatus: 'awaiting_context',
+	activeJobId: 'job-1' as string | undefined,
+	activeJobIsFetched: true,
+	messages: [] as never[],
 	queueOrSendMessage: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -21,7 +24,10 @@ vi.mock('@tanstack/react-query', () => ({
 	}),
 	useQuery: (options: { queryKey: string[] }) =>
 		options.queryKey[0] === 'active-job'
-			? { data: { id: 'job-1' } }
+			? {
+					data: mocks.activeJobId ? { id: mocks.activeJobId } : undefined,
+					isFetched: mocks.activeJobIsFetched,
+				}
 			: { data: { status: mocks.jobStatus }, isError: false },
 	useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
@@ -32,7 +38,7 @@ vi.mock('@/contexts/agent.provider', () => ({
 		isRunning: mocks.isRunning,
 		queueOrSendMessage: mocks.queueOrSendMessage,
 	}),
-	useAgentMessagesSelector: (selector: (messages: never[]) => boolean) => selector([]),
+	useAgentMessagesSelector: (selector: (messages: never[]) => unknown) => selector(mocks.messages),
 }));
 
 vi.mock('@/main', () => ({
@@ -59,6 +65,9 @@ afterEach(() => {
 	cleanup();
 	mocks.isRunning = true;
 	mocks.jobStatus = 'awaiting_context';
+	mocks.activeJobId = 'job-1';
+	mocks.activeJobIsFetched = true;
+	mocks.messages = [];
 	vi.clearAllMocks();
 });
 
@@ -97,5 +106,43 @@ describe('RequestWarehouseCredentialsToolCall', () => {
 		const view = render(<RequestWarehouseCredentialsToolCall toolPart={toolPart} />);
 
 		await waitFor(() => expect(view.queryByText('Action required')).toBeNull());
+	});
+
+	it('waits for the active job before falling back to a persisted job ID', async () => {
+		mocks.isRunning = false;
+		mocks.activeJobId = undefined;
+		mocks.activeJobIsFetched = false;
+		mocks.messages = [
+			{
+				role: 'assistant',
+				parts: [
+					{
+						type: 'tool-generate_onboarding_rules',
+						state: 'output-available',
+						output: { jobId: 'old-job' },
+					},
+				],
+			},
+		] as never[];
+		const toolPart = {
+			type: 'tool-request_warehouse_credentials',
+			toolCallId: 'tool-1',
+			state: 'output-available',
+			input: { provider: 'postgres' },
+			output: { provider: 'postgres', status: 'credentials-required' },
+		} as ToolCallComponentProps<'request_warehouse_credentials'>['toolPart'];
+		const view = render(<RequestWarehouseCredentialsToolCall toolPart={toolPart} />);
+
+		await waitFor(() => expect(mocks.queueOrSendMessage).not.toHaveBeenCalled());
+
+		mocks.activeJobId = 'new-job';
+		mocks.activeJobIsFetched = true;
+		view.rerender(<RequestWarehouseCredentialsToolCall toolPart={toolPart} />);
+
+		await waitFor(() =>
+			expect(mocks.queueOrSendMessage).toHaveBeenCalledWith({
+				text: '[internal:onboarding-context-request] jobId=new-job',
+			}),
+		);
 	});
 });

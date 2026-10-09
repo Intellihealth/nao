@@ -6,6 +6,7 @@ import { CommandBlock } from '@/components/command-block';
 import { Button } from '@/components/ui/button';
 import { useAgentContext, useAgentMessages } from '@/contexts/agent.provider';
 import { useAssistantMessage } from '@/contexts/assistant-message';
+import { isOnboardingContextRequestMessage } from '@/lib/ai';
 
 export function OnboardingCommandToolCall({ toolPart }: ToolCallComponentProps<'onboarding_command'>) {
 	const command = toolPart.input?.command;
@@ -30,7 +31,9 @@ export function OnboardingCommandToolCall({ toolPart }: ToolCallComponentProps<'
 			.slice(partIndex + 1)
 			.some((part) => part.type === 'tool-onboarding_command');
 		const hasClarification = message.parts.some((part) => part.type === 'tool-clarification');
-		const hasAnswer = messages.slice(messageIndex + 1).some((nextMessage) => nextMessage.role === 'user');
+		const hasAnswer = messages
+			.slice(messageIndex + 1)
+			.some((nextMessage) => nextMessage.role === 'user' && !isOnboardingContextRequestMessage(nextMessage));
 
 		return !hasLaterCommand && !hasClarification && !hasAnswer;
 	}, [messages, toolPart.toolCallId]);

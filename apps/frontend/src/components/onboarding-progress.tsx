@@ -1,4 +1,7 @@
 import { useMemo } from 'react';
+import type { inferRouterOutputs } from '@trpc/server';
+
+import type { TrpcRouter } from '@nao/backend/trpc';
 import type { UIMessage } from '@nao/backend/chat';
 
 import { useAgentMessages } from '@/contexts/agent.provider';
@@ -11,10 +14,30 @@ const ONBOARDING_STEPS = {
 	database: ['Connect warehouse', 'Initialize', 'Sync metadata', 'Prepare context'],
 } as const;
 
-export function OnboardingProgress({ complete = false }: { complete?: boolean }) {
+type WarehouseProvisioningStatus =
+	inferRouterOutputs<TrpcRouter>['onboarding']['getWarehouseProvisioningStatus']['status'];
+
+const DATABASE_COMPLETED_STEPS: Partial<Record<WarehouseProvisioningStatus, number>> = {
+	queued: 1,
+	initializing: 1,
+	syncing: 2,
+	registering: 3,
+	awaiting_context: 3,
+	finalizing: 3,
+	publishing: 3,
+	ready: 4,
+};
+
+export function OnboardingProgress({
+	complete = false,
+	warehouseStatus,
+}: {
+	complete?: boolean;
+	warehouseStatus?: WarehouseProvisioningStatus;
+}) {
 	const progress = useOnboardingProgress();
 	const steps = progress ? ONBOARDING_STEPS[progress.flow] : [''];
-	const completedSteps = complete ? steps.length : Math.min(progress?.step ?? 0, Math.max(steps.length - 1, 0));
+	const completedSteps = getCompletedSteps(progress, steps.length, complete, warehouseStatus);
 
 	return (
 		<div
@@ -69,6 +92,24 @@ export type OnboardingProgressState = {
 	flow: keyof typeof ONBOARDING_STEPS;
 	step: number;
 };
+
+export function getCompletedSteps(
+	progress: OnboardingProgressState | null,
+	stepCount: number,
+	complete: boolean,
+	warehouseStatus?: WarehouseProvisioningStatus,
+): number {
+	if (complete) {
+		return stepCount;
+	}
+	const reportedSteps =
+		progress?.flow === 'database' && warehouseStatus
+			? Math.max(progress.step, DATABASE_COMPLETED_STEPS[warehouseStatus] ?? 0)
+			: (progress?.step ?? 0);
+	const maximumSteps =
+		progress?.flow === 'database' && warehouseStatus === 'ready' ? stepCount : Math.max(stepCount - 1, 0);
+	return Math.min(reportedSteps, maximumSteps);
+}
 
 export function isOnboardingComplete(
 	hasProject: boolean,

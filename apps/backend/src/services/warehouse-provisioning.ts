@@ -25,7 +25,11 @@ import {
 import { decryptSecret, encryptSecret } from '../utils/encryption';
 import { logger, serializeError } from '../utils/logger';
 import { createNewProject, createTempProjectDir } from '../utils/project-import.utils';
-import { deleteManagedGithubRepository, provisionManagedGithubRepository } from './managed-github-repository';
+import {
+	deleteManagedGithubRepository,
+	getManagedGithubRepositoryFullName,
+	provisionManagedGithubRepository,
+} from './managed-github-repository';
 import { generateOnboardingRules } from './onboarding-rules';
 import { saveProjectWarehouseEnvVars } from './warehouse-credentials';
 
@@ -36,6 +40,7 @@ const JOB_LEASE_MS = 5 * 60_000;
 const JOB_HEARTBEAT_MS = 30_000;
 const JOB_RECONCILIATION_MS = 60_000;
 const FAILED_JOB_COOLDOWN_MS = 30_000;
+const MAX_JOB_ATTEMPTS = 5;
 const WORKER_ID = `${os.hostname()}:${process.pid}:${crypto.randomUUID()}`;
 const PROVISIONING_STATUSES: WarehouseProvisioningStatus[] = ['queued', 'initializing', 'syncing', 'registering'];
 const FINALIZATION_STATUSES: WarehouseProvisioningStatus[] = ['finalizing', 'publishing'];
@@ -318,11 +323,15 @@ async function provisionWarehouse(jobId: string, input: StartWarehouseProvisioni
 		await updateJob(jobId, { status: 'syncing' });
 		await runNaoCommand(['sync', '--provider', 'databases'], projectDir, commandEnvironment, SYNC_TIMEOUT_MS);
 
-		await updateJob(jobId, { status: 'registering' });
+		const projectId = crypto.randomUUID();
+		registeredProjectId = projectId;
+		registeredProjectPath = path.resolve(env.NAO_PROJECTS_DIR, projectId);
+		await updateJob(jobId, { status: 'registering', projectId });
 		const project = await createNewProject({
 			sourceDir: projectDir,
 			projectName: input.name,
 			orgId: input.orgId,
+			projectId,
 		});
 		registeredProjectId = project.projectId;
 		registeredProjectPath = path.resolve(env.NAO_PROJECTS_DIR, project.projectId);
@@ -339,6 +348,7 @@ async function provisionWarehouse(jobId: string, input: StartWarehouseProvisioni
 		await updateJob(jobId, {
 			status: 'awaiting_context',
 			projectId: project.projectId,
+			attempts: 0,
 			encryptedCredentials: null,
 			temporaryDirectory: null,
 		});
@@ -372,6 +382,10 @@ async function provisionWarehouse(jobId: string, input: StartWarehouseProvisioni
 async function maybeStartFinalization(jobId: string): Promise<void> {
 	const job = await warehouseProvisioningJobQueries.getWarehouseProvisioningJobById(jobId);
 	if (!job || job.status !== 'awaiting_context' || !job.projectId || !job.businessContext || !job.modelProjectId) {
+		return;
+	}
+	if (job.attempts >= MAX_JOB_ATTEMPTS) {
+		await failExhaustedJob(job);
 		return;
 	}
 
@@ -438,11 +452,7 @@ async function finalizeWarehouseProvisioning(jobId: string): Promise<void> {
 				error: serializedError,
 			},
 		});
-		await rollbackRegisteredProject(
-			job.projectId,
-			registeredProjectPath,
-			managedRepository?.created ? managedRepository.repoFullName : undefined,
-		);
+		await rollbackRegisteredProject(job.projectId, registeredProjectPath, managedRepository?.repoFullName);
 		await updateJob(jobId, {
 			status: 'failed',
 			error: 'Project setup could not be completed. Please try again.',
@@ -595,6 +605,10 @@ export async function reconcileWarehouseProvisioningJobs(): Promise<void> {
 
 	await Promise.all(
 		jobs.map(async (job) => {
+			if (job.status !== 'awaiting_context' && job.attempts >= MAX_JOB_ATTEMPTS) {
+				await failExhaustedJob(job);
+				return;
+			}
 			if (PROVISIONING_STATUSES.includes(job.status)) {
 				await recoverProvisioningJob(job.id);
 				return;
@@ -620,12 +634,12 @@ async function recoverProvisioningJob(jobId: string): Promise<void> {
 				fs.rmSync(job.temporaryDirectory, { recursive: true, force: true });
 			}
 
-			let registeredProject = job.projectId ? await projectQueries.getProjectById(job.projectId) : null;
-			if (!registeredProject && job.status === 'registering') {
-				registeredProject = await projectQueries.getProjectByOrgAndName(job.orgId, job.projectName);
-			}
-			if (registeredProject?.path) {
-				await rollbackRegisteredProject(registeredProject.id, registeredProject.path);
+			if (job.projectId) {
+				const registeredProject = await projectQueries.getProjectById(job.projectId);
+				await rollbackRegisteredProject(
+					job.projectId,
+					registeredProject?.path ?? path.resolve(env.NAO_PROJECTS_DIR, job.projectId),
+				);
 			}
 
 			if (!job.encryptedCredentials) {
@@ -680,6 +694,39 @@ async function recoverFinalizationJob(jobId: string): Promise<void> {
 	await withJobLease(jobId, async () => {
 		await updateJob(jobId, { status: 'finalizing' });
 		await finalizeWarehouseProvisioning(jobId);
+	});
+}
+
+async function failExhaustedJob(job: DBWarehouseProvisioningJob): Promise<void> {
+	if (job.temporaryDirectory) {
+		try {
+			fs.rmSync(job.temporaryDirectory, { recursive: true, force: true });
+		} catch (error) {
+			logger.error('Failed to clean up exhausted warehouse setup', {
+				source: 'system',
+				context: { jobId: job.id, error: serializeError(error) },
+			});
+		}
+	}
+	if (job.projectId) {
+		const managedRepositoryFullName =
+			job.status === 'publishing'
+				? getManagedGithubRepositoryFullName({ projectId: job.projectId, projectName: job.projectName })
+				: null;
+		await rollbackRegisteredProject(
+			job.projectId,
+			path.resolve(env.NAO_PROJECTS_DIR, job.projectId),
+			managedRepositoryFullName ?? undefined,
+		);
+	}
+	await updateJob(job.id, {
+		status: 'failed',
+		error: 'Warehouse setup stopped unexpectedly several times. Please try again.',
+		encryptedCredentials: null,
+		temporaryDirectory: null,
+		lockedBy: null,
+		lockedAt: null,
+		finishedAt: new Date(),
 	});
 }
 

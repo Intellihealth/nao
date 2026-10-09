@@ -131,7 +131,10 @@ export function ChatListItem({ chat, needsAttention = false, resumeOnboarding = 
 					),
 				}}
 				onClick={(event) => {
-					if (resumeOnboarding) {
+					const isUnmodifiedPrimaryClick =
+						event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+
+					if (resumeOnboarding && isUnmodifiedPrimaryClick) {
 						event.preventDefault();
 						navigate({ to: '/onboarding', search: { chatId: chat.id } });
 					}

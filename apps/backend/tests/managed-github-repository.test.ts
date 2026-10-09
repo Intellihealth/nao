@@ -36,7 +36,11 @@ vi.mock('jose', () => ({
 	},
 }));
 
-import { provisionManagedGithubRepository } from '../src/services/managed-github-repository';
+import {
+	deleteManagedGithubRepository,
+	getManagedGithubRepositoryFullName,
+	provisionManagedGithubRepository,
+} from '../src/services/managed-github-repository';
 
 type GitExecCallback = (error: Error | null, stdout: string, stderr: string) => void;
 
@@ -75,6 +79,18 @@ beforeEach(() => {
 });
 
 describe('managed GitHub repository provisioning', () => {
+	it('derives the managed repository name from the project identity', () => {
+		expect(getManagedGithubRepositoryFullName(project)).toBe('nao-org/nao-lumen-bike-share-12345678-abcd-ef');
+	});
+
+	it('treats an already deleted managed repository as cleaned up', async () => {
+		vi.mocked(fetch)
+			.mockResolvedValueOnce(jsonResponse(201, { token: 'installation-token' }))
+			.mockResolvedValueOnce(jsonResponse(404, { message: 'Not Found' }));
+
+		await expect(deleteManagedGithubRepository('nao-org/missing')).resolves.toBeUndefined();
+	});
+
 	it('does nothing when managed GitHub is not configured', async () => {
 		for (const key of Object.keys(mocks.env)) {
 			delete mocks.env[key];
@@ -109,12 +125,27 @@ describe('managed GitHub repository provisioning', () => {
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
+	it('fails cleanly when a GitHub API request times out', async () => {
+		const timeoutError = new Error('The operation was aborted due to timeout');
+		timeoutError.name = 'TimeoutError';
+		vi.mocked(fetch).mockRejectedValueOnce(timeoutError);
+
+		await expect(provisionManagedGithubRepository(project)).rejects.toThrow(
+			'GitHub API request timed out. Please try again.',
+		);
+		expect(fetch).toHaveBeenCalledWith(
+			'https://api.github.com/app/installations/456/access_tokens',
+			expect.objectContaining({ signal: expect.anything() }),
+		);
+	});
+
 	it('reuses an existing repository and pushes without exposing the token in Git arguments', async () => {
 		const fetchMock = vi.mocked(fetch);
 		fetchMock.mockResolvedValueOnce(jsonResponse(201, { token: 'installation-token' })).mockResolvedValueOnce(
 			jsonResponse(200, {
 				full_name: 'nao-org/nao-lumen-bike-share-12345678',
 				html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+				private: true,
 			}),
 		);
 
@@ -140,12 +171,29 @@ describe('managed GitHub repository provisioning', () => {
 		);
 	});
 
+	it('rejects an existing public repository before writing project files', async () => {
+		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockResolvedValueOnce(jsonResponse(201, { token: 'installation-token' })).mockResolvedValueOnce(
+			jsonResponse(200, {
+				full_name: 'nao-org/nao-lumen-bike-share-12345678',
+				html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+				private: false,
+			}),
+		);
+
+		await expect(provisionManagedGithubRepository(project)).rejects.toThrow(
+			'Refusing to use public managed repository: nao-org/nao-lumen-bike-share-12345678',
+		);
+		expect(mocks.execFile).not.toHaveBeenCalled();
+	});
+
 	it('rejects an empty repository before pushing an unborn HEAD', async () => {
 		const fetchMock = vi.mocked(fetch);
 		fetchMock.mockResolvedValueOnce(jsonResponse(201, { token: 'installation-token' })).mockResolvedValueOnce(
 			jsonResponse(200, {
 				full_name: 'nao-org/nao-lumen-bike-share-12345678',
 				html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+				private: true,
 			}),
 		);
 		mocks.execFile.mockImplementation(
@@ -175,6 +223,7 @@ describe('managed GitHub repository provisioning', () => {
 			jsonResponse(200, {
 				full_name: 'nao-org/nao-lumen-bike-share-12345678',
 				html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+				private: true,
 			}),
 		);
 		mocks.execFile.mockImplementation(
@@ -205,6 +254,7 @@ describe('managed GitHub repository provisioning', () => {
 				jsonResponse(201, {
 					full_name: 'nao-org/nao-lumen-bike-share-12345678',
 					html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+					private: true,
 				}),
 			);
 
@@ -216,7 +266,7 @@ describe('managed GitHub repository provisioning', () => {
 			expect.objectContaining({
 				method: 'POST',
 				body: JSON.stringify({
-					name: 'nao-lumen-bike-share-12345678',
+					name: 'nao-lumen-bike-share-12345678-abcd-ef',
 					private: true,
 					auto_init: false,
 					description: 'nao managed analytics project',
@@ -235,6 +285,7 @@ describe('managed GitHub repository provisioning', () => {
 				jsonResponse(201, {
 					full_name: 'nao-org/nao-lumen-bike-share-12345678',
 					html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+					private: true,
 				}),
 			)
 			.mockResolvedValueOnce(jsonResponse(201, { token: 'refreshed-token' }));
@@ -295,6 +346,7 @@ describe('managed GitHub repository provisioning', () => {
 				jsonResponse(201, {
 					full_name: 'nao-org/nao-lumen-bike-share-12345678',
 					html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+					private: true,
 				}),
 			)
 			.mockResolvedValueOnce(jsonResponse(201, { token: 'refreshed-token' }))
@@ -347,6 +399,7 @@ describe('managed GitHub repository provisioning', () => {
 				jsonResponse(201, {
 					full_name: 'nao-org/nao-lumen-bike-share-12345678',
 					html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+					private: true,
 				}),
 			)
 			.mockResolvedValueOnce(new Response(null, { status: 204 }));
@@ -378,6 +431,7 @@ describe('managed GitHub repository provisioning', () => {
 			jsonResponse(200, {
 				full_name: 'nao-org/nao-lumen-bike-share-12345678',
 				html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+				private: true,
 			}),
 		);
 		mocks.execFile.mockImplementation(
@@ -404,6 +458,7 @@ describe('managed GitHub repository provisioning', () => {
 			jsonResponse(200, {
 				full_name: 'nao-org/nao-lumen-bike-share-12345678',
 				html_url: 'https://github.com/nao-org/nao-lumen-bike-share-12345678',
+				private: true,
 			}),
 		);
 		mocks.execFile.mockImplementation(

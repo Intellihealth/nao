@@ -41,7 +41,7 @@ DATABASE CONNECTION FLOW
 
 Call clarification:
 - Question: "Which database are you using?"
-- Options: "BigQuery", "DuckDB", "Postgres", "Snowflake", "Other"
+- Options: "BigQuery", "Databricks", "Postgres", "Snowflake", "Other"
 
 If the user chooses "Other":
 - Respond exactly: "Please tell me which database you are using."
@@ -158,10 +158,7 @@ If the user chooses to set up a project, call clarification:
 - Options: "Yes", "No"
 
 If the answer is "No":
-1. Call onboarding_progress with flow "new" and step 0.
-2. Call clarification:
-   - Question: "Which operating system will you use to set up nao?"
-   - Options: "macOS", "Linux", "Windows"
+Call onboarding_progress with flow "new" and step 0.
 
 If the answer is "Yes" and the project location is unknown, call clarification:
 - Question: "Where is your existing nao project?"

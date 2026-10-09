@@ -74,13 +74,16 @@ export function RequestWarehouseCredentialsToolCall({
 	);
 
 	useEffect(() => {
+		if (canRestoreJob && !activeJob.isFetched) {
+			return;
+		}
 		const restoredId = activeJob.data?.id ?? persistedJobId;
 		if (restoredJobId.current || !restoredId) {
 			return;
 		}
 		restoredJobId.current = true;
 		setJobId(restoredId);
-	}, [activeJob.data, persistedJobId]);
+	}, [activeJob.data, activeJob.isFetched, canRestoreJob, persistedJobId]);
 
 	useEffect(() => {
 		const status = job.data?.status;

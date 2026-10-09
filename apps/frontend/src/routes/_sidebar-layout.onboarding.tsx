@@ -184,7 +184,7 @@ function OnboardingPage() {
 			<MobileHeader />
 			<div className='shrink-0 pb-2 pt-4'>
 				<div className='mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 md:px-4'>
-					<OnboardingProgress complete={onboardingComplete} />
+					<OnboardingProgress complete={onboardingComplete} warehouseStatus={warehouseJob.data?.status} />
 					{showDeployKey && (
 						<Dialog>
 							<div

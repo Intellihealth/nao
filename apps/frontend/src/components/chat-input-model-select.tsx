@@ -60,7 +60,7 @@ export function ChatInputModelSelect() {
 		: undefined;
 	const selectedModelName = selectedAvailableModel?.name ?? selectedModel?.modelId ?? 'Select model';
 
-	if (isPending) {
+	if (isPending || project.isPending) {
 		return null;
 	}
 
@@ -76,20 +76,21 @@ export function ChatInputModelSelect() {
 		);
 	}
 
+	const singleModel = (
+		<>
+			{selectedModel && (
+				<LlmProviderIcon
+					provider={selectedModel.provider}
+					baseUrl={selectedAvailableModel?.baseUrl}
+					className='size-4'
+				/>
+			)}
+			<span>{selectedModelName}</span>
+			{selectedModel && <NamedProviderHint provider={selectedModel.provider} />}
+		</>
+	);
+
 	if (isOnboarding) {
-		const singleModel = (
-			<>
-				{selectedModel && (
-					<LlmProviderIcon
-						provider={selectedModel.provider}
-						baseUrl={selectedAvailableModel?.baseUrl}
-						className='size-4'
-					/>
-				)}
-				<span>{selectedModelName}</span>
-				{selectedModel && <NamedProviderHint provider={selectedModel.provider} />}
-			</>
-		);
 		return (
 			<div className='flex items-center gap-2 text-sm font-normal text-muted-foreground'>
 				{singleModel}
@@ -99,19 +100,6 @@ export function ChatInputModelSelect() {
 	}
 
 	if (isTrial && !isOnboarding) {
-		const singleModel = (
-			<>
-				{selectedModel && (
-					<LlmProviderIcon
-						provider={selectedModel.provider}
-						baseUrl={selectedAvailableModel?.baseUrl}
-						className='size-4'
-					/>
-				)}
-				<span>{selectedModelName}</span>
-				{selectedModel && <NamedProviderHint provider={selectedModel.provider} />}
-			</>
-		);
 		return (
 			<div className='flex items-center gap-2 text-sm font-normal text-muted-foreground'>
 				{singleModel}
@@ -121,20 +109,6 @@ export function ChatInputModelSelect() {
 	}
 
 	if (!canCycleModels) {
-		const singleModel = (
-			<>
-				{selectedModel && (
-					<LlmProviderIcon
-						provider={selectedModel.provider}
-						baseUrl={selectedAvailableModel?.baseUrl}
-						className='size-4'
-					/>
-				)}
-				<span>{selectedModelName}</span>
-				{selectedModel && <NamedProviderHint provider={selectedModel.provider} />}
-			</>
-		);
-
 		if (!isAdmin) {
 			return (
 				<div className='flex items-center gap-2 text-sm font-normal text-muted-foreground'>{singleModel}</div>
