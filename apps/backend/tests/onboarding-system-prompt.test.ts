@@ -24,7 +24,7 @@ describe('onboarding system prompt', () => {
 	it('offers popular databases first and handles unsupported providers', () => {
 		const prompt = renderOnboardingSystemPrompt();
 
-		expect(prompt).toContain('- Options: "BigQuery", "DuckDB", "Postgres", "Snowflake", "Other"');
+		expect(prompt).toContain('- Options: "BigQuery", "Databricks", "Postgres", "Snowflake", "Other"');
 		expect(prompt).toContain('Respond exactly: "Please tell me which database you are using."');
 		expect(prompt).toContain('Do not call clarification or any other tool');
 		expect(prompt).toContain('Do not invent or guess a provider identifier');
