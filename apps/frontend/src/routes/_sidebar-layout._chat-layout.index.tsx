@@ -7,7 +7,7 @@ import type { StoryItem } from '@/lib/stories-page';
 
 import { ChatInput } from '@/components/chat-input';
 import { ChatMessages } from '@/components/chat-messages/chat-messages';
-import { ExampleProjectInfoCard, ExampleProjectPromptCard } from '@/components/example-project-info-card';
+import { ExampleProjectPromptCard } from '@/components/example-project-info-card';
 import { SavedPromptSuggestions } from '@/components/chat-saved-prompt-suggestions';
 import { MobileHeader } from '@/components/mobile-header';
 import { ProjectSwitcher } from '@/components/project-selector';
@@ -138,11 +138,6 @@ function HomePage() {
 	return (
 		<div className='relative flex flex-col h-full flex-1 min-w-72 overflow-hidden justify-center'>
 			<MobileHeader showExampleProjectInfo={showExampleProject} />
-			{showExampleProject && (
-				<div className='group/header absolute right-4 top-3 z-20 max-md:hidden'>
-					<ExampleProjectInfoCard compact />
-				</div>
-			)}
 			{messages.length === 0 &&
 				!showExampleProject &&
 				multiProjectMode === 'switch' &&
@@ -177,14 +172,7 @@ function HomePage() {
 						{showExampleProject ? (
 							<>
 								<div className='relative z-10 mb-6 max-w-2xl space-y-2 px-6 text-center'>
-									<h1 className='font-borna text-xl tracking-tight md:text-3xl'>
-										Try out nao through our Jaffle Shop data
-									</h1>
-									<p className='text-sm leading-relaxed text-muted-foreground'>
-										{username ? `Welcome, ${capitalize(username)}! ` : ''}
-										Just type what you’d like to know, nao will explore the data and turn it into a
-										clear answer.
-									</p>
+									<h1 className='font-borna text-xl tracking-tight md:text-3xl'>{stateTitle}</h1>
 								</div>
 								<div className='relative flex w-full max-w-3xl mx-auto flex-col gap-4'>
 									<img
