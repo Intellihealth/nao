@@ -1,6 +1,6 @@
 import { resolveDataKey } from '@nao/shared';
 import { Code, Pencil } from 'lucide-react';
-import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useContext, useMemo, useRef, useState } from 'react';
 import { StoryBlockDragContext } from './story-editor-drag-context';
 import { StoryEmbedFallback } from './story-embed-fallback';
 import type { ChartType } from '@nao/shared/chart-types';
@@ -162,17 +162,16 @@ export function StoryChartEmbedShell({
 	);
 
 	const isKpi = chart.chartType === 'kpi_card';
-	useEffect(() => {
-		if (isEditOpen) {
-			setPalette(resolveChartPaletteHexes(paletteScopeRef.current));
-		}
-	}, [isEditOpen]);
+	const openEditor = () => {
+		setPalette(resolveChartPaletteHexes(paletteScopeRef.current));
+		setIsEditOpen(true);
+	};
 
 	const editButton = canEdit ? (
 		<Button
 			variant='ghost-muted'
 			size='icon-xs'
-			onClick={() => setIsEditOpen(true)}
+			onClick={openEditor}
 			title='Edit chart'
 			className='shrink-0 hover:bg-accent hover:rounded-full'
 		>
