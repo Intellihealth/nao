@@ -209,10 +209,13 @@ export function ChartConfigEditForm({
 		setYAxisMaxText(toRangeString(config.y_axis_max));
 		setYAxisRightMinText(toRangeString(config.y_axis_right_min));
 		setYAxisRightMaxText(toRangeString(config.y_axis_right_max));
-		setPaletteHexes(palette ?? resolveChartPaletteHexes());
 		setError(null);
 		setOpenValueFormatIndexes(new Set());
-	}, [config, palette]);
+	}, [config]);
+
+	useEffect(() => {
+		setPaletteHexes(palette ?? resolveChartPaletteHexes());
+	}, [palette]);
 
 	const xAxisOptions = useMemo(() => {
 		if (availableColumns.length === 0) {
