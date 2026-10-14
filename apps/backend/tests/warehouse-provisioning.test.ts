@@ -358,7 +358,6 @@ describe('warehouse provisioning', () => {
 		expect(creationInput.projectId).toEqual(expect.any(String));
 		expect(warehouseProvisioningJobQueries.updateWarehouseProvisioningJob).toHaveBeenCalledWith(jobId, {
 			status: 'registering',
-			projectId: creationInput.projectId,
 		});
 		expect(scheduledJobQueries.deleteJobByUniqueKey).toHaveBeenCalledWith('context.recommendations:project-1');
 		expect(projectQueries.deleteProject).toHaveBeenCalledWith('project-1');

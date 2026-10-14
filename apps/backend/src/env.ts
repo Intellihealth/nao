@@ -279,6 +279,10 @@ const baseRawEnvSchema = z.object({
 		.string()
 		.optional()
 		.transform((val) => val?.trim() || undefined),
+	STRIPE_CLOUD_YEARLY_PRICE_LOOKUP_KEY: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
 	STRIPE_PORTAL_CONFIGURATION_ID: z
 		.string()
 		.optional()
@@ -462,6 +466,7 @@ const envSchema = rawEnvSchema
 				'STRIPE_WEBHOOK_SECRET',
 				'STRIPE_CLOUD_PRODUCT_ID',
 				'STRIPE_CLOUD_MONTHLY_PRICE_LOOKUP_KEY',
+				'STRIPE_CLOUD_YEARLY_PRICE_LOOKUP_KEY',
 			] as const) {
 				if (!data[variable]) {
 					ctx.addIssue({
