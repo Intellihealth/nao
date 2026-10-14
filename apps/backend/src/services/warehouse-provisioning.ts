@@ -326,7 +326,7 @@ async function provisionWarehouse(jobId: string, input: StartWarehouseProvisioni
 		const projectId = crypto.randomUUID();
 		registeredProjectId = projectId;
 		registeredProjectPath = path.resolve(env.NAO_PROJECTS_DIR, projectId);
-		await updateJob(jobId, { status: 'registering', projectId });
+		await updateJob(jobId, { status: 'registering' });
 		const project = await createNewProject({
 			sourceDir: projectDir,
 			projectName: input.name,
