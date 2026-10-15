@@ -38,62 +38,6 @@ STRUCT_COL = {"name": "meta", "type": "struct<x: int>"}
 JSON_COL = {"name": "props", "type": "json"}
 
 
-class TestBaseProfilingQuery:
-    def test_string_column(self):
-        ctx = make_context(DatabaseContext)
-        sql = ctx._build_profiling_query(STR_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("status") AS null_count,
-                COUNT(DISTINCT "status") AS distinct_count
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_integer_column(self):
-        ctx = make_context(DatabaseContext)
-        sql = ctx._build_profiling_query(INT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("id") AS null_count,
-                COUNT(DISTINCT "id") AS distinct_count
-                , MIN("id") AS col_min
-                , MAX("id") AS col_max
-                , AVG(CAST("id" AS DOUBLE)) AS col_mean
-                , STDDEV_POP(CAST("id" AS DOUBLE)) AS col_stddev
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_float_column(self):
-        ctx = make_context(DatabaseContext)
-        sql = ctx._build_profiling_query(FLOAT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("amount") AS null_count,
-                COUNT(DISTINCT "amount") AS distinct_count
-                , MIN("amount") AS col_min
-                , MAX("amount") AS col_max
-                , AVG(CAST("amount" AS DOUBLE)) AS col_mean
-                , STDDEV_POP(CAST("amount" AS DOUBLE)) AS col_stddev
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_date_column(self):
-        ctx = make_context(DatabaseContext)
-        sql = ctx._build_profiling_query(DATE_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("created_at") AS null_count,
-                COUNT(DISTINCT "created_at") AS distinct_count
-                , MIN("created_at") AS col_min
-                , MAX("created_at") AS col_max
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-
 class TestComplexTypeDetection:
     @pytest.mark.parametrize(
         "col_type",
@@ -189,118 +133,406 @@ class TestProfileComplexTypeColumn:
         assert "top_values" not in profile
 
 
-class TestMssqlProfilingQuery:
-    def test_string_column(self):
-        ctx = make_context(MssqlDatabaseContext)
-        sql = ctx._build_profiling_query(STR_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT([status]) AS null_count,
-                (SELECT COUNT(DISTINCT [status]) FROM [my_schema].[my_table] ) AS distinct_count
-            FROM [my_schema].[my_table]
-        """)
-        assert normalize(sql) == expected
+PROFILING_QUERY_CASES = [
+    pytest.param(
+        DatabaseContext,
+        STR_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("status") AS null_count,
+            COUNT(DISTINCT "status") AS distinct_count
+        FROM "my_schema"."my_table"
+        """,
+        id="base-string",
+    ),
+    pytest.param(
+        DatabaseContext,
+        INT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("id") AS null_count,
+            COUNT(DISTINCT "id") AS distinct_count
+            , MIN("id") AS col_min
+            , MAX("id") AS col_max
+            , AVG(CAST("id" AS DOUBLE)) AS col_mean
+            , STDDEV_POP(CAST("id" AS DOUBLE)) AS col_stddev
+        FROM "my_schema"."my_table"
+        """,
+        id="base-integer",
+    ),
+    pytest.param(
+        DatabaseContext,
+        FLOAT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("amount") AS null_count,
+            COUNT(DISTINCT "amount") AS distinct_count
+            , MIN("amount") AS col_min
+            , MAX("amount") AS col_max
+            , AVG(CAST("amount" AS DOUBLE)) AS col_mean
+            , STDDEV_POP(CAST("amount" AS DOUBLE)) AS col_stddev
+        FROM "my_schema"."my_table"
+        """,
+        id="base-float",
+    ),
+    pytest.param(
+        DatabaseContext,
+        DATE_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("created_at") AS null_count,
+            COUNT(DISTINCT "created_at") AS distinct_count
+            , MIN("created_at") AS col_min
+            , MAX("created_at") AS col_max
+        FROM "my_schema"."my_table"
+        """,
+        id="base-date",
+    ),
+    pytest.param(
+        MssqlDatabaseContext,
+        STR_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT([status]) AS null_count,
+            (SELECT COUNT(DISTINCT [status]) FROM [my_schema].[my_table] ) AS distinct_count
+        FROM [my_schema].[my_table]
+        """,
+        id="mssql-string",
+    ),
+    pytest.param(
+        MssqlDatabaseContext,
+        INT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT([id]) AS null_count,
+            (SELECT COUNT(DISTINCT [id]) FROM [my_schema].[my_table] ) AS distinct_count
+            , MIN([id]) AS col_min
+            , MAX([id]) AS col_max
+            , AVG(CAST([id] AS FLOAT)) AS col_mean
+            , STDEVP(CAST([id] AS FLOAT)) AS col_stddev
+        FROM [my_schema].[my_table]
+        """,
+        id="mssql-integer",
+    ),
+    pytest.param(
+        MssqlDatabaseContext,
+        FLOAT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT([amount]) AS null_count,
+            (SELECT COUNT(DISTINCT [amount]) FROM [my_schema].[my_table] ) AS distinct_count
+            , MIN([amount]) AS col_min
+            , MAX([amount]) AS col_max
+            , AVG(CAST([amount] AS FLOAT)) AS col_mean
+            , STDEVP(CAST([amount] AS FLOAT)) AS col_stddev
+        FROM [my_schema].[my_table]
+        """,
+        id="mssql-float",
+    ),
+    pytest.param(
+        MssqlDatabaseContext,
+        DATE_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT([created_at]) AS null_count,
+            (SELECT COUNT(DISTINCT [created_at]) FROM [my_schema].[my_table] ) AS distinct_count
+            , MIN([created_at]) AS col_min
+            , MAX([created_at]) AS col_max
+        FROM [my_schema].[my_table]
+        """,
+        id="mssql-date",
+    ),
+    pytest.param(
+        BigQueryDatabaseContext,
+        STR_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT(`status`) AS null_count,
+            COUNT(DISTINCT `status`) AS distinct_count
+        FROM `my_schema`.`my_table`
+        """,
+        id="bigquery-string",
+    ),
+    pytest.param(
+        BigQueryDatabaseContext,
+        INT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT(`id`) AS null_count,
+            COUNT(DISTINCT `id`) AS distinct_count
+            , MIN(`id`) AS col_min
+            , MAX(`id`) AS col_max
+            , AVG(CAST(`id` AS FLOAT64)) AS col_mean
+            , STDDEV_POP(CAST(`id` AS FLOAT64)) AS col_stddev
+        FROM `my_schema`.`my_table`
+        """,
+        id="bigquery-integer",
+    ),
+    pytest.param(
+        BigQueryDatabaseContext,
+        FLOAT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT(`amount`) AS null_count,
+            COUNT(DISTINCT `amount`) AS distinct_count
+            , MIN(`amount`) AS col_min
+            , MAX(`amount`) AS col_max
+            , AVG(CAST(`amount` AS FLOAT64)) AS col_mean
+            , STDDEV_POP(CAST(`amount` AS FLOAT64)) AS col_stddev
+        FROM `my_schema`.`my_table`
+        """,
+        id="bigquery-float",
+    ),
+    pytest.param(
+        BigQueryDatabaseContext,
+        DATE_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT(`created_at`) AS null_count,
+            COUNT(DISTINCT `created_at`) AS distinct_count
+            , MIN(`created_at`) AS col_min
+            , MAX(`created_at`) AS col_max
+        FROM `my_schema`.`my_table`
+        """,
+        id="bigquery-date",
+    ),
+    pytest.param(
+        SnowflakeDatabaseContext,
+        STR_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("status") AS null_count,
+            COUNT(DISTINCT "status") AS distinct_count
+        FROM "my_schema"."my_table"
+        """,
+        id="snowflake-string",
+    ),
+    pytest.param(
+        SnowflakeDatabaseContext,
+        INT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("id") AS null_count,
+            COUNT(DISTINCT "id") AS distinct_count
+            , MIN("id") AS col_min
+            , MAX("id") AS col_max
+            , AVG("id"::FLOAT) AS col_mean
+            , STDDEV_POP("id"::FLOAT) AS col_stddev
+        FROM "my_schema"."my_table"
+        """,
+        id="snowflake-integer",
+    ),
+    pytest.param(
+        SnowflakeDatabaseContext,
+        FLOAT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("amount") AS null_count,
+            COUNT(DISTINCT "amount") AS distinct_count
+            , MIN("amount") AS col_min
+            , MAX("amount") AS col_max
+            , AVG("amount"::FLOAT) AS col_mean
+            , STDDEV_POP("amount"::FLOAT) AS col_stddev
+        FROM "my_schema"."my_table"
+        """,
+        id="snowflake-float",
+    ),
+    pytest.param(
+        DatabricksDatabaseContext,
+        STR_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT(`status`) AS null_count,
+            COUNT(DISTINCT `status`) AS distinct_count
+        FROM `my_schema`.`my_table`
+        """,
+        id="databricks-string",
+    ),
+    pytest.param(
+        DatabricksDatabaseContext,
+        FLOAT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT(`amount`) AS null_count,
+            COUNT(DISTINCT `amount`) AS distinct_count
+            , MIN(`amount`) AS col_min
+            , MAX(`amount`) AS col_max
+            , AVG(CAST(`amount` AS DOUBLE)) AS col_mean
+            , STDDEV_POP(CAST(`amount` AS DOUBLE)) AS col_stddev
+        FROM `my_schema`.`my_table`
+        """,
+        id="databricks-float",
+    ),
+    pytest.param(
+        AthenaDatabaseContext,
+        STR_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("status") AS null_count,
+            COUNT(DISTINCT "status") AS distinct_count
+        FROM "my_schema"."my_table"
+        """,
+        id="athena-string",
+    ),
+    pytest.param(
+        AthenaDatabaseContext,
+        FLOAT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("amount") AS null_count,
+            COUNT(DISTINCT "amount") AS distinct_count
+            , MIN("amount") AS col_min
+            , MAX("amount") AS col_max
+            , AVG(CAST("amount" AS DOUBLE)) AS col_mean
+            , STDDEV_POP(CAST("amount" AS DOUBLE)) AS col_stddev
+        FROM "my_schema"."my_table"
+        """,
+        id="athena-float",
+    ),
+    pytest.param(
+        RedshiftDatabaseContext,
+        STR_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("status") AS null_count,
+            COUNT(DISTINCT "status") AS distinct_count
+        FROM "my_schema"."my_table"
+        """,
+        id="redshift-string",
+    ),
+    pytest.param(
+        RedshiftDatabaseContext,
+        FLOAT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("amount") AS null_count,
+            COUNT(DISTINCT "amount") AS distinct_count
+            , MIN("amount") AS col_min
+            , MAX("amount") AS col_max
+            , AVG("amount"::float) AS col_mean
+            , STDDEV_POP("amount"::float) AS col_stddev
+        FROM "my_schema"."my_table"
+        """,
+        id="redshift-float",
+    ),
+    pytest.param(
+        RedshiftDatabaseContext,
+        INT_COL,
+        """
+        SELECT
+            COUNT(*) - COUNT("id") AS null_count,
+            COUNT(DISTINCT "id") AS distinct_count
+            , MIN("id") AS col_min
+            , MAX("id") AS col_max
+            , AVG("id"::float) AS col_mean
+            , STDDEV_POP("id"::float) AS col_stddev
+        FROM "my_schema"."my_table"
+        """,
+        id="redshift-integer",
+    ),
+]
 
-    def test_integer_column(self):
-        ctx = make_context(MssqlDatabaseContext)
-        sql = ctx._build_profiling_query(INT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT([id]) AS null_count,
-                (SELECT COUNT(DISTINCT [id]) FROM [my_schema].[my_table] ) AS distinct_count
-                , MIN([id]) AS col_min
-                , MAX([id]) AS col_max
-                , AVG(CAST([id] AS FLOAT)) AS col_mean
-                , STDEVP(CAST([id] AS FLOAT)) AS col_stddev
-            FROM [my_schema].[my_table]
-        """)
-        assert normalize(sql) == expected
+TOP_VALUES_QUERY_CASES = [
+    pytest.param(
+        BigQueryDatabaseContext,
+        STR_COL,
+        """
+        SELECT `status` AS value, COUNT(*) AS cnt
+        FROM `my_schema`.`my_table`
+        GROUP BY `status`
+        ORDER BY cnt DESC, `status` ASC
+        LIMIT 10
+        """,
+        id="bigquery-string",
+    ),
+    pytest.param(
+        SnowflakeDatabaseContext,
+        STR_COL,
+        """
+        SELECT "status" AS value, COUNT(*) AS cnt
+        FROM "my_schema"."my_table"
+        GROUP BY "status"
+        ORDER BY cnt DESC, "status" ASC
+        LIMIT 10
+        """,
+        id="snowflake-string",
+    ),
+    pytest.param(
+        DatabricksDatabaseContext,
+        STR_COL,
+        """
+        SELECT `status` AS value, COUNT(*) AS cnt
+        FROM `my_schema`.`my_table`
+        GROUP BY `status`
+        ORDER BY cnt DESC, `status` ASC
+        LIMIT 10
+        """,
+        id="databricks-string",
+    ),
+    pytest.param(
+        AthenaDatabaseContext,
+        STR_COL,
+        """
+        SELECT "status" AS value, COUNT(*) AS cnt
+        FROM "my_schema"."my_table"
+        GROUP BY "status"
+        ORDER BY cnt DESC, "status" ASC
+        LIMIT 10
+        """,
+        id="athena-string",
+    ),
+    pytest.param(
+        RedshiftDatabaseContext,
+        STR_COL,
+        """
+        SELECT "status" AS value, COUNT(*) AS cnt
+        FROM "my_schema"."my_table"
+        GROUP BY "status"
+        ORDER BY cnt DESC, "status" ASC
+        LIMIT 10
+        """,
+        id="redshift-string",
+    ),
+    pytest.param(
+        DatabaseContext,
+        STR_COL,
+        """
+        SELECT "status" AS value, COUNT(*) AS cnt
+        FROM "my_schema"."my_table"
+        GROUP BY "status"
+        ORDER BY cnt DESC, "status" ASC
+        LIMIT 10
+        """,
+        id="base-string",
+    ),
+    pytest.param(
+        MssqlDatabaseContext,
+        STR_COL,
+        """
+        SELECT TOP 10 [status] AS value, COUNT(*) AS cnt
+        FROM [my_schema].[my_table]
+        GROUP BY [status]
+        ORDER BY cnt DESC, [status] ASC
+        """,
+        id="mssql-string",
+    ),
+]
 
-    def test_float_column(self):
-        ctx = make_context(MssqlDatabaseContext)
-        sql = ctx._build_profiling_query(FLOAT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT([amount]) AS null_count,
-                (SELECT COUNT(DISTINCT [amount]) FROM [my_schema].[my_table] ) AS distinct_count
-                , MIN([amount]) AS col_min
-                , MAX([amount]) AS col_max
-                , AVG(CAST([amount] AS FLOAT)) AS col_mean
-                , STDEVP(CAST([amount] AS FLOAT)) AS col_stddev
-            FROM [my_schema].[my_table]
-        """)
-        assert normalize(sql) == expected
 
-    def test_date_column(self):
-        ctx = make_context(MssqlDatabaseContext)
-        sql = ctx._build_profiling_query(DATE_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT([created_at]) AS null_count,
-                (SELECT COUNT(DISTINCT [created_at]) FROM [my_schema].[my_table] ) AS distinct_count
-                , MIN([created_at]) AS col_min
-                , MAX([created_at]) AS col_max
-            FROM [my_schema].[my_table]
-        """)
-        assert normalize(sql) == expected
+@pytest.mark.parametrize(("context_class", "column", "expected_sql"), PROFILING_QUERY_CASES)
+def test_profiling_query(context_class, column, expected_sql):
+    sql = make_context(context_class)._build_profiling_query(column)
+    assert normalize(sql) == normalize(expected_sql)
 
 
-class TestBigQueryProfilingQuery:
-    def test_string_column(self):
-        ctx = make_context(BigQueryDatabaseContext)
-        sql = ctx._build_profiling_query(STR_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT(`status`) AS null_count,
-                COUNT(DISTINCT `status`) AS distinct_count
-            FROM `my_schema`.`my_table`
-        """)
-        assert normalize(sql) == expected
+@pytest.mark.parametrize(("context_class", "column", "expected_sql"), TOP_VALUES_QUERY_CASES)
+def test_top_values_query(context_class, column, expected_sql):
+    sql = make_context(context_class)._build_top_values_query(column)
+    assert normalize(sql) == normalize(expected_sql)
 
-    def test_integer_column(self):
-        ctx = make_context(BigQueryDatabaseContext)
-        sql = ctx._build_profiling_query(INT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT(`id`) AS null_count,
-                COUNT(DISTINCT `id`) AS distinct_count
-                , MIN(`id`) AS col_min
-                , MAX(`id`) AS col_max
-                , AVG(CAST(`id` AS FLOAT64)) AS col_mean
-                , STDDEV_POP(CAST(`id` AS FLOAT64)) AS col_stddev
-            FROM `my_schema`.`my_table`
-        """)
-        assert normalize(sql) == expected
 
-    def test_float_column(self):
-        ctx = make_context(BigQueryDatabaseContext)
-        sql = ctx._build_profiling_query(FLOAT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT(`amount`) AS null_count,
-                COUNT(DISTINCT `amount`) AS distinct_count
-                , MIN(`amount`) AS col_min
-                , MAX(`amount`) AS col_max
-                , AVG(CAST(`amount` AS FLOAT64)) AS col_mean
-                , STDDEV_POP(CAST(`amount` AS FLOAT64)) AS col_stddev
-            FROM `my_schema`.`my_table`
-        """)
-        assert normalize(sql) == expected
-
-    def test_date_column(self):
-        ctx = make_context(BigQueryDatabaseContext)
-        sql = ctx._build_profiling_query(DATE_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT(`created_at`) AS null_count,
-                COUNT(DISTINCT `created_at`) AS distinct_count
-                , MIN(`created_at`) AS col_min
-                , MAX(`created_at`) AS col_max
-            FROM `my_schema`.`my_table`
-        """)
-        assert normalize(sql) == expected
-
-    def test_partition_filter_injected(self):
+class TestProfilingPartitionFilter:
+    def test_bigquery_injects_partition_filter(self):
         ctx = make_context(BigQueryDatabaseContext, partition_cols=["created_at"])
         sql = ctx._build_profiling_query(STR_COL)
         expected = normalize("""
@@ -312,68 +544,7 @@ class TestBigQueryProfilingQuery:
         """)
         assert normalize(sql) == expected
 
-    def test_no_partition_filter_when_no_partition(self):
-        ctx = make_context(BigQueryDatabaseContext, partition_cols=[])
-        sql = ctx._build_profiling_query(STR_COL)
-        assert "WHERE" not in sql
-        assert "DATE_SUB" not in sql
-
-    def test_full_query(self):
-        ctx = make_context(BigQueryDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        expected = normalize("""
-            SELECT `status` AS value, COUNT(*) AS cnt
-            FROM `my_schema`.`my_table`
-            GROUP BY `status`
-            ORDER BY cnt DESC, `status` ASC
-            LIMIT 10
-        """)
-        assert normalize(sql) == expected
-
-
-class TestSnowflakeProfilingQuery:
-    def test_string_column(self):
-        ctx = make_context(SnowflakeDatabaseContext)
-        sql = ctx._build_profiling_query(STR_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("status") AS null_count,
-                COUNT(DISTINCT "status") AS distinct_count
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_integer_column(self):
-        ctx = make_context(SnowflakeDatabaseContext)
-        sql = ctx._build_profiling_query(INT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("id") AS null_count,
-                COUNT(DISTINCT "id") AS distinct_count
-                , MIN("id") AS col_min
-                , MAX("id") AS col_max
-                , AVG("id"::FLOAT) AS col_mean
-                , STDDEV_POP("id"::FLOAT) AS col_stddev
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_float_column(self):
-        ctx = make_context(SnowflakeDatabaseContext)
-        sql = ctx._build_profiling_query(FLOAT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("amount") AS null_count,
-                COUNT(DISTINCT "amount") AS distinct_count
-                , MIN("amount") AS col_min
-                , MAX("amount") AS col_max
-                , AVG("amount"::FLOAT) AS col_mean
-                , STDDEV_POP("amount"::FLOAT) AS col_stddev
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_partition_filter_uses_dateadd(self):
+    def test_snowflake_clustering_filter_uses_dateadd(self):
         ctx = make_context(SnowflakeDatabaseContext)
         ctx.clustering_columns = MagicMock(return_value=["created_at"])
         sql = ctx._build_profiling_query(STR_COL)
@@ -386,47 +557,7 @@ class TestSnowflakeProfilingQuery:
         """)
         assert normalize(sql) == expected
 
-    def test_full_query(self):
-        ctx = make_context(SnowflakeDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        expected = normalize("""
-            SELECT "status" AS value, COUNT(*) AS cnt
-            FROM "my_schema"."my_table"
-            GROUP BY "status"
-            ORDER BY cnt DESC, "status" ASC
-            LIMIT 10
-        """)
-        assert normalize(sql) == expected
-
-
-class TestDatabricksProfilingQuery:
-    def test_string_column(self):
-        ctx = make_context(DatabricksDatabaseContext)
-        sql = ctx._build_profiling_query(STR_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT(`status`) AS null_count,
-                COUNT(DISTINCT `status`) AS distinct_count
-            FROM `my_schema`.`my_table`
-        """)
-        assert normalize(sql) == expected
-
-    def test_float_column(self):
-        ctx = make_context(DatabricksDatabaseContext)
-        sql = ctx._build_profiling_query(FLOAT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT(`amount`) AS null_count,
-                COUNT(DISTINCT `amount`) AS distinct_count
-                , MIN(`amount`) AS col_min
-                , MAX(`amount`) AS col_max
-                , AVG(CAST(`amount` AS DOUBLE)) AS col_mean
-                , STDDEV_POP(CAST(`amount` AS DOUBLE)) AS col_stddev
-            FROM `my_schema`.`my_table`
-        """)
-        assert normalize(sql) == expected
-
-    def test_partition_filter_uses_date_sub(self):
+    def test_databricks_partition_filter_uses_date_sub(self):
         ctx = make_context(DatabricksDatabaseContext, partition_cols=["created_at"])
         sql = ctx._build_profiling_query(STR_COL)
         expected = normalize("""
@@ -438,159 +569,7 @@ class TestDatabricksProfilingQuery:
         """)
         assert normalize(sql) == expected
 
-    def test_full_query(self):
-        ctx = make_context(DatabricksDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        expected = normalize("""
-            SELECT `status` AS value, COUNT(*) AS cnt
-            FROM `my_schema`.`my_table`
-            GROUP BY `status`
-            ORDER BY cnt DESC, `status` ASC
-            LIMIT 10
-        """)
-        assert normalize(sql) == expected
-
-
-class TestAthenaProfilingQuery:
-    def test_string_column(self):
-        ctx = make_context(AthenaDatabaseContext)
-        sql = ctx._build_profiling_query(STR_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("status") AS null_count,
-                COUNT(DISTINCT "status") AS distinct_count
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_float_column(self):
-        ctx = make_context(AthenaDatabaseContext)
-        sql = ctx._build_profiling_query(FLOAT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("amount") AS null_count,
-                COUNT(DISTINCT "amount") AS distinct_count
-                , MIN("amount") AS col_min
-                , MAX("amount") AS col_max
-                , AVG(CAST("amount" AS DOUBLE)) AS col_mean
-                , STDDEV_POP(CAST("amount" AS DOUBLE)) AS col_stddev
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_no_partition_filter_even_when_partition_cols_present(self):
+    def test_athena_skips_partition_filter_even_when_partition_cols_present(self):
         ctx = make_context(AthenaDatabaseContext, partition_cols=["created_at"])
         sql = ctx._build_profiling_query(STR_COL)
         assert "WHERE" not in sql
-
-    def test_full_query(self):
-        ctx = make_context(AthenaDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        expected = normalize("""
-            SELECT "status" AS value, COUNT(*) AS cnt
-            FROM "my_schema"."my_table"
-            GROUP BY "status"
-            ORDER BY cnt DESC, "status" ASC
-            LIMIT 10
-        """)
-        assert normalize(sql) == expected
-
-
-class TestRedshiftProfilingQuery:
-    def test_string_column(self):
-        ctx = make_context(RedshiftDatabaseContext)
-        sql = ctx._build_profiling_query(STR_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("status") AS null_count,
-                COUNT(DISTINCT "status") AS distinct_count
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_float_column(self):
-        ctx = make_context(RedshiftDatabaseContext)
-        sql = ctx._build_profiling_query(FLOAT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("amount") AS null_count,
-                COUNT(DISTINCT "amount") AS distinct_count
-                , MIN("amount") AS col_min
-                , MAX("amount") AS col_max
-                , AVG("amount"::float) AS col_mean
-                , STDDEV_POP("amount"::float) AS col_stddev
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_integer_column(self):
-        ctx = make_context(RedshiftDatabaseContext)
-        sql = ctx._build_profiling_query(INT_COL)
-        expected = normalize("""
-            SELECT
-                COUNT(*) - COUNT("id") AS null_count,
-                COUNT(DISTINCT "id") AS distinct_count
-                , MIN("id") AS col_min
-                , MAX("id") AS col_max
-                , AVG("id"::float) AS col_mean
-                , STDDEV_POP("id"::float) AS col_stddev
-            FROM "my_schema"."my_table"
-        """)
-        assert normalize(sql) == expected
-
-    def test_full_query(self):
-        ctx = make_context(RedshiftDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        expected = normalize("""
-            SELECT "status" AS value, COUNT(*) AS cnt
-            FROM "my_schema"."my_table"
-            GROUP BY "status"
-            ORDER BY cnt DESC, "status" ASC
-            LIMIT 10
-        """)
-        assert normalize(sql) == expected
-
-
-class TestBaseTopValuesQuery:
-    def test_string_column(self):
-        ctx = make_context(DatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        expected = normalize("""
-            SELECT "status" AS value, COUNT(*) AS cnt
-            FROM "my_schema"."my_table"
-            GROUP BY "status"
-            ORDER BY cnt DESC, "status" ASC
-            LIMIT 10
-        """)
-        assert normalize(sql) == expected
-
-    def test_respects_quoting(self):
-        ctx = make_context(DatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        assert '"status"' in sql
-        assert '"my_schema"."my_table"' in sql
-
-
-class TestMssqlTopValuesQuery:
-    def test_uses_top_not_limit(self):
-        ctx = make_context(MssqlDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        assert "TOP 10" in sql
-        assert "LIMIT" not in sql
-
-    def test_full_query(self):
-        ctx = make_context(MssqlDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        expected = normalize("""
-            SELECT TOP 10 [status] AS value, COUNT(*) AS cnt
-            FROM [my_schema].[my_table]
-            GROUP BY [status]
-            ORDER BY cnt DESC, [status] ASC
-        """)
-        assert normalize(sql) == expected
-
-    def test_uses_bracket_quoting(self):
-        ctx = make_context(MssqlDatabaseContext)
-        sql = ctx._build_top_values_query(STR_COL)
-        assert "[status]" in sql
-        assert "[my_schema].[my_table]" in sql

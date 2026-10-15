@@ -2,6 +2,7 @@ import importlib
 import json
 import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -29,6 +30,13 @@ from nao_core.config.llm import ModelCosts
 from nao_core.config.test import ComparisonConfig, TestConfig
 
 test_runner_module = importlib.import_module("nao_core.commands.test.runner")
+
+MODEL = ModelConfig(provider="openai", model_id="custom-model")
+COSTS = ModelCosts(input_no_cache=1.0, input_cache_read=0.1, input_cache_write=1.25, output=2.0)
+MIXED_ATTEMPTS = [
+    NaoTestRunResult(name="orders", model="m", passed=True, message="match"),
+    NaoTestRunResult(name="orders", model="m", passed=False, message="values differ"),
+]
 
 
 def test_check_dataframe_treats_comma_formatted_numbers_as_equal():
@@ -88,78 +96,43 @@ def test_check_dataframe_reports_the_verification_error_when_no_data_was_produce
 
 
 def test_filter_test_cases_by_name():
-    test_cases = [
-        NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1"),
-        NaoTestCase(name="users", prompt="p2", file_path=Path("tests/users.yml"), sql="select 1"),
-    ]
-
-    filtered = filter_test_cases(test_cases, "users")
+    filtered = filter_test_cases([_case("orders"), _case("users")], "users")
 
     assert len(filtered) == 1
     assert filtered[0].name == "users"
 
 
 def test_filter_test_cases_by_file_stem():
-    test_cases = [
-        NaoTestCase(name="orders check", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1"),
-    ]
-
-    filtered = filter_test_cases(test_cases, "orders")
+    filtered = filter_test_cases([_case("orders check", file_path=Path("tests/orders.yml"))], "orders")
 
     assert len(filtered) == 1
     assert filtered[0].name == "orders check"
 
 
 def test_filter_test_cases_missing():
-    test_cases = [
-        NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1"),
-    ]
-
     with pytest.raises(ValueError, match="Test not found: missing"):
-        filter_test_cases(test_cases, "missing")
+        filter_test_cases([_case("orders")], "missing")
 
 
 def test_filter_test_cases_comma_separated():
-    test_cases = [
-        NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1"),
-        NaoTestCase(name="users", prompt="p2", file_path=Path("tests/users.yml"), sql="select 1"),
-        NaoTestCase(name="revenue", prompt="p3", file_path=Path("tests/revenue.yml"), sql="select 1"),
-    ]
-
-    filtered = filter_test_cases(test_cases, "orders,revenue")
+    filtered = filter_test_cases([_case("orders"), _case("users"), _case("revenue")], "orders,revenue")
 
     assert [tc.name for tc in filtered] == ["orders", "revenue"]
 
 
 def test_filter_test_cases_comma_separated_deduplicates():
-    test_cases = [
-        NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1"),
-        NaoTestCase(name="users", prompt="p2", file_path=Path("tests/users.yml"), sql="select 1"),
-    ]
-
-    filtered = filter_test_cases(test_cases, "orders, orders ,users")
+    filtered = filter_test_cases([_case("orders"), _case("users")], "orders, orders ,users")
 
     assert [tc.name for tc in filtered] == ["orders", "users"]
 
 
 def test_filter_test_cases_comma_separated_missing():
-    test_cases = [
-        NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1"),
-    ]
-
     with pytest.raises(ValueError, match="Test not found: missing"):
-        filter_test_cases(test_cases, "orders,missing")
+        filter_test_cases([_case("orders")], "orders,missing")
 
 
 def test_serialize_model_costs_uses_backend_field_names():
-    costs = ModelCosts(
-        input_no_cache=1.0,
-        input_cache_read=0.1,
-        input_cache_write=1.25,
-        output=2.0,
-    )
-
-    assert serialize_model_costs(costs) == {
+    assert serialize_model_costs(COSTS) == {
         "inputNoCache": 1.0,
         "inputCacheRead": 0.1,
         "inputCacheWrite": 1.25,
@@ -167,112 +140,48 @@ def test_serialize_model_costs_uses_backend_field_names():
     }
 
 
-def _successful_run_response() -> Mock:
-    response = Mock()
-    response.status_code = 200
-    response.json.return_value = {
-        "text": "",
-        "toolCalls": [],
-        "usage": {"totalTokens": 0},
-        "cost": {"totalCost": 0},
-        "finishReason": "stop",
-    }
-    return response
-
-
 def test_client_sends_the_test_case_database_as_database_id(monkeypatch):
-    test_case = NaoTestCase(
-        name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1", database="bigquery-prod"
-    )
-    client = AgentClient(backend_url="http://backend")
-    session = Mock()
-    session.post.return_value = _successful_run_response()
-    monkeypatch.setattr(client, "_get_session", lambda: (session, 0))
+    payload = _client_payload(monkeypatch, _case("orders", database="bigquery-prod"))
 
-    client.run_test(test_case)
-
-    payload = session.post.call_args.kwargs["json"]
     assert payload["databaseId"] == "bigquery-prod"
 
 
 def test_client_omits_database_id_when_the_test_case_has_none(monkeypatch):
-    test_case = NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1")
-    client = AgentClient(backend_url="http://backend")
-    session = Mock()
-    session.post.return_value = _successful_run_response()
-    monkeypatch.setattr(client, "_get_session", lambda: (session, 0))
+    payload = _client_payload(monkeypatch, _case("orders"))
 
-    client.run_test(test_case)
-
-    payload = session.post.call_args.kwargs["json"]
     assert "databaseId" not in payload
 
 
 def test_client_omits_sql_when_the_test_case_is_assertion_only(monkeypatch):
-    test_case = NaoTestCase(
-        name="ambiguous",
-        prompt="What was the revenue?",
-        file_path=Path("tests/ambiguous.yml"),
-        assertions=[ToolCallAssertion(tool="clarification")],
-    )
-    client = AgentClient(backend_url="http://backend")
-    session = Mock()
-    session.post.return_value = _successful_run_response()
-    monkeypatch.setattr(client, "_get_session", lambda: (session, 0))
+    payload = _client_payload(monkeypatch, _clarification_case())
 
-    client.run_test(test_case)
-
-    payload = session.post.call_args.kwargs["json"]
     assert "sql" not in payload
 
 
 def test_run_test_passes_configured_costs_to_client(monkeypatch):
-    test_case = NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1")
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    costs = ModelCosts(
-        input_no_cache=1.0,
-        input_cache_read=0.1,
-        input_cache_write=1.25,
-        output=2.0,
-    )
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="",
-        tool_calls=[],
-        usage=TokenUsage(totalTokens=0),
-        cost=TokenCost(totalCost=0),
-        finish_reason="stop",
-        duration_ms=1,
-    )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
+    test_case = _case("orders")
+    client = _stub_client(monkeypatch, _agent_result())
 
-    result = run_test(test_case, model, costs=costs)
+    result = run_test(test_case, MODEL, costs=COSTS)
 
     assert result.passed is True
-    client.run_test.assert_called_once_with(test_case, provider="openai", model_id="custom-model", costs=costs)
+    client.run_test.assert_called_once_with(test_case, provider="openai", model_id="custom-model", costs=COSTS)
 
 
 def test_run_test_records_reference_sql_with_verification(monkeypatch):
-    test_case = NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1")
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="",
-        tool_calls=[],
-        usage=TokenUsage(totalTokens=0),
-        cost=TokenCost(totalCost=0),
-        finish_reason="stop",
-        duration_ms=1,
-        verification=VerificationResult(
-            data=[{"total": 1}],
-            expectedData=[{"total": 1}],
-            expectedColumns=["total"],
-            sql="SELECT total FROM query_abc",
+    _stub_client(
+        monkeypatch,
+        _agent_result(
+            verification=VerificationResult(
+                data=[{"total": 1}],
+                expectedData=[{"total": 1}],
+                expectedColumns=["total"],
+                sql="SELECT total FROM query_abc",
+            ),
         ),
     )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
 
-    result = run_test(test_case, model)
+    result = run_test(_case("orders"), MODEL)
 
     assert result.passed is True
     assert result.details is not None
@@ -281,33 +190,19 @@ def test_run_test_records_reference_sql_with_verification(monkeypatch):
 
 
 def test_run_test_records_reference_sql_without_verification(monkeypatch):
-    test_case = NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1")
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="",
-        tool_calls=[],
-        usage=TokenUsage(totalTokens=0),
-        cost=TokenCost(totalCost=0),
-        finish_reason="stop",
-        duration_ms=1,
-    )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
+    _stub_client(monkeypatch, _agent_result())
 
-    result = run_test(test_case, model)
+    result = run_test(_case("orders"), MODEL)
 
     assert result.details is not None
     assert result.details.reference_sql == "select 1"
 
 
 def test_run_test_records_reference_sql_on_client_error(monkeypatch):
-    test_case = NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1")
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
+    client = _stub_client(monkeypatch)
     client.run_test.side_effect = AgentClientError("backend unreachable")
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
 
-    result = run_test(test_case, model)
+    result = run_test(_case("orders"), MODEL)
 
     assert result.passed is False
     assert result.error == "backend unreachable"
@@ -317,26 +212,15 @@ def test_run_test_records_reference_sql_on_client_error(monkeypatch):
 
 def test_run_test_assertion_only_passes_when_tool_called(monkeypatch):
     """Issue #1261: assert the agent asked a follow-up (clarification tool)."""
-    test_case = NaoTestCase(
-        name="ambiguous_revenue_period",
-        prompt="What was the revenue?",
-        file_path=Path("tests/ambiguous_revenue_period.yml"),
-        sql=None,
-        assertions=[ToolCallAssertion(tool="clarification")],
+    _stub_client(
+        monkeypatch,
+        _agent_result(
+            text="Which time period should I use?",
+            tool_calls=[{"toolName": "clarification", "args": {"question": "Which time period?"}}],
+        ),
     )
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="Which time period should I use?",
-        tool_calls=[{"toolName": "clarification", "args": {"question": "Which time period?"}}],
-        usage=TokenUsage(totalTokens=10),
-        cost=TokenCost(totalCost=0.01),
-        finish_reason="stop",
-        duration_ms=5,
-    )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
 
-    result = run_test(test_case, model)
+    result = run_test(_clarification_case(), MODEL)
 
     assert result.passed is True
     assert result.message == "tool_call: clarification"
@@ -344,94 +228,61 @@ def test_run_test_assertion_only_passes_when_tool_called(monkeypatch):
 
 def test_run_test_assertion_only_fails_when_agent_returns_numeric_answer(monkeypatch):
     """Issue #1261 fail direction: numeric SQL answer instead of a follow-up."""
-    test_case = NaoTestCase(
-        name="ambiguous_revenue_period",
-        prompt="What was the revenue?",
-        file_path=Path("tests/ambiguous_revenue_period.yml"),
-        sql=None,
-        assertions=[ToolCallAssertion(tool="clarification")],
+    _stub_client(
+        monkeypatch,
+        _agent_result(
+            text="Total revenue is 52123123",
+            tool_calls=[
+                {
+                    "toolName": "execute_sql",
+                    "args": {"sql_query": "SELECT SUM(amount) AS total_revenue FROM orders"},
+                }
+            ],
+        ),
     )
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="Total revenue is 52123123",
-        tool_calls=[
-            {
-                "toolName": "execute_sql",
-                "args": {"sql_query": "SELECT SUM(amount) AS total_revenue FROM orders"},
-            }
-        ],
-        usage=TokenUsage(totalTokens=20),
-        cost=TokenCost(totalCost=0.02),
-        finish_reason="stop",
-        duration_ms=8,
-    )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
 
-    result = run_test(test_case, model)
+    result = run_test(_clarification_case(), MODEL)
 
     assert result.passed is False
     assert result.message == "missing tool_call: clarification"
 
 
 def test_run_test_combines_sql_verification_and_tool_assertion(monkeypatch):
-    test_case = NaoTestCase(
-        name="orders",
-        prompt="total revenue",
-        file_path=Path("tests/orders.yml"),
-        sql="select 1",
-        assertions=[ToolCallAssertion(tool="execute_sql")],
-    )
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="ok",
-        tool_calls=[{"toolName": "execute_sql", "args": {"sql_query": "SELECT 1"}}],
-        usage=TokenUsage(totalTokens=5),
-        cost=TokenCost(totalCost=0.0),
-        finish_reason="stop",
-        duration_ms=2,
-        verification=VerificationResult(
-            data=[{"total": 1}],
-            expectedData=[{"total": 1}],
-            expectedColumns=["total"],
-            sql="SELECT total FROM query_abc",
+    _stub_client(
+        monkeypatch,
+        _agent_result(
+            text="ok",
+            tool_calls=[{"toolName": "execute_sql", "args": {"sql_query": "SELECT 1"}}],
+            verification=VerificationResult(
+                data=[{"total": 1}],
+                expectedData=[{"total": 1}],
+                expectedColumns=["total"],
+                sql="SELECT total FROM query_abc",
+            ),
         ),
     )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
 
-    result = run_test(test_case, model)
+    result = run_test(_revenue_case_asserting("execute_sql"), MODEL)
 
     assert result.passed is True
     assert result.message == "tool_call: execute_sql; match"
 
 
 def test_run_test_fails_when_sql_matches_but_tool_assertion_missing(monkeypatch):
-    test_case = NaoTestCase(
-        name="orders",
-        prompt="total revenue",
-        file_path=Path("tests/orders.yml"),
-        sql="select 1",
-        assertions=[ToolCallAssertion(tool="clarification")],
-    )
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="ok",
-        tool_calls=[{"toolName": "execute_sql", "args": {}}],
-        usage=TokenUsage(totalTokens=5),
-        cost=TokenCost(totalCost=0.0),
-        finish_reason="stop",
-        duration_ms=2,
-        verification=VerificationResult(
-            data=[{"total": 1}],
-            expectedData=[{"total": 1}],
-            expectedColumns=["total"],
+    _stub_client(
+        monkeypatch,
+        _agent_result(
+            text="ok",
+            tool_calls=[{"toolName": "execute_sql", "args": {}}],
+            verification=VerificationResult(
+                data=[{"total": 1}],
+                expectedData=[{"total": 1}],
+                expectedColumns=["total"],
+            ),
         ),
     )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
 
-    result = run_test(test_case, model)
+    result = run_test(_revenue_case_asserting("clarification"), MODEL)
 
     assert result.passed is False
     assert "missing tool_call: clarification" in result.message
@@ -439,27 +290,16 @@ def test_run_test_fails_when_sql_matches_but_tool_assertion_missing(monkeypatch)
 
 
 def test_run_test_fails_when_both_sql_and_assertions_configured_but_no_verification_data(monkeypatch):
-    test_case = NaoTestCase(
-        name="orders",
-        prompt="total revenue",
-        file_path=Path("tests/orders.yml"),
-        sql="select 1",
-        assertions=[ToolCallAssertion(tool="execute_sql")],
+    _stub_client(
+        monkeypatch,
+        _agent_result(
+            text="ok",
+            tool_calls=[{"toolName": "execute_sql", "args": {"sql_query": "SELECT 1"}}],
+            verification=None,
+        ),
     )
-    model = ModelConfig(provider="openai", model_id="custom-model")
-    client = Mock()
-    client.run_test.return_value = AgentTestResult(
-        text="ok",
-        tool_calls=[{"toolName": "execute_sql", "args": {"sql_query": "SELECT 1"}}],
-        usage=TokenUsage(totalTokens=5),
-        cost=TokenCost(totalCost=0.0),
-        finish_reason="stop",
-        duration_ms=2,
-        verification=None,
-    )
-    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
 
-    result = run_test(test_case, model)
+    result = run_test(_revenue_case_asserting("execute_sql"), MODEL)
 
     assert result.passed is False
     assert "tool_call: execute_sql" in result.message
@@ -468,9 +308,9 @@ def test_run_test_fails_when_both_sql_and_assertions_configured_but_no_verificat
 
 def test_filter_test_cases_by_folder(tmp_path):
     tests_dir = tmp_path / "tests"
-    tc_orders = NaoTestCase(name="orders", prompt="p1", file_path=tests_dir / "revenue" / "orders.yml", sql="select 1")
-    tc_mrr = NaoTestCase(name="mrr", prompt="p2", file_path=tests_dir / "revenue" / "mrr.yml", sql="select 1")
-    tc_users = NaoTestCase(name="users", prompt="p3", file_path=tests_dir / "ops" / "users.yml", sql="select 1")
+    tc_orders = _case("orders", file_path=tests_dir / "revenue" / "orders.yml")
+    tc_mrr = _case("mrr", file_path=tests_dir / "revenue" / "mrr.yml")
+    tc_users = _case("users", file_path=tests_dir / "ops" / "users.yml")
 
     filtered = filter_test_cases([tc_orders, tc_mrr, tc_users], "revenue", tests_dir)
 
@@ -479,25 +319,12 @@ def test_filter_test_cases_by_folder(tmp_path):
 
 def test_filter_test_cases_folder_and_name_combined(tmp_path):
     tests_dir = tmp_path / "tests"
-    tc_orders = NaoTestCase(name="orders", prompt="p1", file_path=tests_dir / "revenue" / "orders.yml", sql="select 1")
-    tc_users = NaoTestCase(name="users", prompt="p2", file_path=tests_dir / "ops" / "users.yml", sql="select 1")
+    tc_orders = _case("orders", file_path=tests_dir / "revenue" / "orders.yml")
+    tc_users = _case("users", file_path=tests_dir / "ops" / "users.yml")
 
     filtered = filter_test_cases([tc_orders, tc_users], "revenue,users", tests_dir)
 
     assert {tc.name for tc in filtered} == {"orders", "users"}
-
-
-def test_filter_test_cases_by_name_without_tests_dir_unchanged():
-    # Backward-compat: two-arg call still filters by name/stem.
-    test_cases = [
-        NaoTestCase(name="orders", prompt="p1", file_path=Path("tests/orders.yml"), sql="select 1"),
-        NaoTestCase(name="users", prompt="p2", file_path=Path("tests/users.yml"), sql="select 1"),
-    ]
-
-    filtered = filter_test_cases(test_cases, "users")
-
-    assert len(filtered) == 1
-    assert filtered[0].name == "users"
 
 
 def run_test_command(
@@ -508,12 +335,14 @@ def run_test_command(
     saved_results: list | None = None,
     saved_payload: list[dict] | None = None,
     outcomes: list[bool] | None = None,
+    delays: dict[tuple[str, str], float] | None = None,
     **flags,
 ) -> list[dict]:
     """Run the `nao test` command against stubbed collaborators and report what it ran.
 
     Pass ``tables`` to also collect the (title, dataframe) pairs printed as summaries.
     Pass ``saved_results`` to capture the results list handed to ``save_results``.
+    Pass ``delays`` to make each (model, case) run sleep before returning.
     """
     cases = [
         NaoTestCase(name="orders", prompt="p1", file_path=tmp_path / "orders.yml", sql="select 1"),
@@ -523,6 +352,8 @@ def run_test_command(
     real_save_results = test_runner_module.save_results
 
     def run(test_case, model, **kwargs):
+        if delays is not None:
+            time.sleep(delays[(str(model), test_case.name)])
         runs.append({"case": test_case, "model": model, **kwargs})
         passed = outcomes[len(runs) - 1] if outcomes is not None else True
         return NaoTestRunResult(
@@ -620,14 +451,8 @@ def test_multi_model_runs_keep_legacy_output_for_k1(tmp_path, monkeypatch):
 
 
 def test_results_table_status_requires_all_attempts_to_pass(monkeypatch):
-    results = [
-        NaoTestRunResult(name="orders", model="m", passed=True, message="match"),
-        NaoTestRunResult(name="orders", model="m", passed=False, message="values differ"),
-    ]
-    tables: list = []
-
-    monkeypatch.setattr(test_runner_module.UI, "table", lambda df, title=None, **kwargs: tables.append((title, df)))
-    test_runner_module.print_run_table(results)
+    tables = _capture_printed_tables(monkeypatch)
+    test_runner_module.print_run_table(MIXED_ATTEMPTS)
 
     table = dict(tables)["Test Results"]
     assert table["Status"].tolist() == ["[red]✗[/red]"]
@@ -635,14 +460,8 @@ def test_results_table_status_requires_all_attempts_to_pass(monkeypatch):
 
 
 def test_model_matrix_status_requires_all_attempts_to_pass(monkeypatch):
-    results = [
-        NaoTestRunResult(name="orders", model="m", passed=True, message="match"),
-        NaoTestRunResult(name="orders", model="m", passed=False, message="values differ"),
-    ]
-    tables: list = []
-
-    monkeypatch.setattr(test_runner_module.UI, "table", lambda df, title=None, **kwargs: tables.append((title, df)))
-    test_runner_module.print_model_matrix(results)
+    tables = _capture_printed_tables(monkeypatch)
+    test_runner_module.print_model_matrix(MIXED_ATTEMPTS)
 
     table = dict(tables)["Pass / Fail by Test and Model"]
     assert table["m"].tolist() == ["[red]✗[/red]"]
@@ -681,9 +500,7 @@ def test_summary_table_is_one_totals_row_with_always_pass_rate(monkeypatch):
             tool_call_count=4,
         ),
     ]
-    tables: list = []
-
-    monkeypatch.setattr(test_runner_module.UI, "table", lambda df, title=None, **kwargs: tables.append((title, df)))
+    tables = _capture_printed_tables(monkeypatch)
     test_runner_module.print_summary_table(results)
 
     title, table = tables[0]
@@ -784,10 +601,6 @@ def test_invalid_k_is_rejected(tmp_path, monkeypatch):
 
 def test_threaded_runs_are_reported_grouped_by_model(tmp_path, monkeypatch):
     config = NaoConfig(project_name="test-project", test=TestConfig(models=["openai:gpt-4.1", "anthropic:claude-4-5"]))
-    cases = [
-        NaoTestCase(name="orders", prompt="p1", file_path=tmp_path / "orders.yml", sql="select 1"),
-        NaoTestCase(name="users", prompt="p2", file_path=tmp_path / "users.yml", sql="select 1"),
-    ]
     # Slowest run is submitted first so completions finish in reverse of submission order.
     delays = {
         ("openai:gpt-4.1", "orders"): 0.04,
@@ -797,22 +610,7 @@ def test_threaded_runs_are_reported_grouped_by_model(tmp_path, monkeypatch):
     }
     saved: list[NaoTestRunResult] = []
 
-    def run(test_case, model, **kwargs):
-        time.sleep(delays[(str(model), test_case.name)])
-        return NaoTestRunResult(name=test_case.name, model=str(model), passed=True, message="match")
-
-    def save_results(results, output_dir):
-        saved.extend(results)
-        return output_dir / "results.json"
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(test_runner_module, "NaoConfig", Mock(try_load=Mock(return_value=config)))
-    monkeypatch.setattr(test_runner_module, "discover_tests", lambda project_path: cases)
-    monkeypatch.setattr(test_runner_module, "run_test", run)
-    monkeypatch.setattr(test_runner_module, "save_results", save_results)
-    monkeypatch.setattr(test_runner_module.UI, "table", lambda *args, **kwargs: None)
-
-    test_runner_module.test(threads=4)
+    run_test_command(monkeypatch, tmp_path, config, saved_results=saved, delays=delays, threads=4)
 
     assert [(r.model, r.name) for r in saved] == [
         ("openai:gpt-4.1", "orders"),
@@ -882,3 +680,74 @@ def test_save_results_records_per_model_summaries(tmp_path):
     assert data["pass_metrics"]["k"] == 1
     assert set(data["pass_metrics"]["aggregate"].keys()) == {"pass_at_1", "pass_at_k", "pass_hat_k"}
     assert data["results"][0]["attempt"] == 1
+
+
+def _case(name: str, **overrides) -> NaoTestCase:
+    fields: dict[str, Any] = {
+        "name": name,
+        "prompt": "p",
+        "file_path": Path(f"tests/{name}.yml"),
+        "sql": "select 1",
+        **overrides,
+    }
+    return NaoTestCase(**fields)
+
+
+def _clarification_case() -> NaoTestCase:
+    return _case(
+        "ambiguous_revenue_period",
+        prompt="What was the revenue?",
+        sql=None,
+        assertions=[ToolCallAssertion(tool="clarification")],
+    )
+
+
+def _revenue_case_asserting(tool: str) -> NaoTestCase:
+    return _case("orders", prompt="total revenue", assertions=[ToolCallAssertion(tool=tool)])
+
+
+def _agent_result(**overrides) -> AgentTestResult:
+    fields: dict[str, Any] = {
+        "text": "",
+        "tool_calls": [],
+        "usage": TokenUsage(totalTokens=0),
+        "cost": TokenCost(totalCost=0),
+        "finish_reason": "stop",
+        "duration_ms": 1,
+        **overrides,
+    }
+    return AgentTestResult(**fields)
+
+
+def _stub_client(monkeypatch, result: AgentTestResult | None = None) -> Mock:
+    client = Mock()
+    client.run_test.return_value = result
+    monkeypatch.setattr(test_runner_module, "get_client", lambda **_: client)
+    return client
+
+
+def _client_payload(monkeypatch, test_case: NaoTestCase) -> dict:
+    """The JSON body `AgentClient.run_test` posts to the backend for `test_case`."""
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "text": "",
+        "toolCalls": [],
+        "usage": {"totalTokens": 0},
+        "cost": {"totalCost": 0},
+        "finishReason": "stop",
+    }
+    session = Mock()
+    session.post.return_value = response
+    client = AgentClient(backend_url="http://backend")
+    monkeypatch.setattr(client, "_get_session", lambda: (session, 0))
+
+    client.run_test(test_case)
+
+    return session.post.call_args.kwargs["json"]
+
+
+def _capture_printed_tables(monkeypatch) -> list:
+    tables: list = []
+    monkeypatch.setattr(test_runner_module.UI, "table", lambda df, title=None, **kwargs: tables.append((title, df)))
+    return tables

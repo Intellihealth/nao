@@ -1,3 +1,5 @@
+import pytest
+
 from nao_core.commands.test.summary import (
     group_by_test_and_model,
     pass_metrics_for_group,
@@ -102,24 +104,17 @@ def test_pass_metrics_partial_group():
     assert metrics["pass_hat_k"] == 0.0
 
 
-def test_pass_metrics_all_passed():
-    runs = [run("m", True), run("m", True), run("m", True)]
+@pytest.mark.parametrize(
+    ("outcomes", "expected_rate"),
+    [([True, True, True], 1.0), ([False, False], 0.0)],
+    ids=["all_passed", "all_failed"],
+)
+def test_pass_metrics_uniform_outcomes(outcomes, expected_rate):
+    metrics = pass_metrics_for_group([run("m", passed) for passed in outcomes])
 
-    metrics = pass_metrics_for_group(runs)
-
-    assert metrics["pass_at_1"] == 1.0
-    assert metrics["pass_at_k"] == 1.0
-    assert metrics["pass_hat_k"] == 1.0
-
-
-def test_pass_metrics_all_failed():
-    runs = [run("m", False), run("m", False)]
-
-    metrics = pass_metrics_for_group(runs)
-
-    assert metrics["pass_at_1"] == 0.0
-    assert metrics["pass_at_k"] == 0.0
-    assert metrics["pass_hat_k"] == 0.0
+    assert metrics["pass_at_1"] == expected_rate
+    assert metrics["pass_at_k"] == expected_rate
+    assert metrics["pass_hat_k"] == expected_rate
 
 
 def test_pass_metrics_k_equals_one():

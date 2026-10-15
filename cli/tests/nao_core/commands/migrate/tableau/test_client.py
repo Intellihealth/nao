@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from unittest.mock import patch
 
 import httpx
@@ -21,17 +22,6 @@ def test_list_views_reads_every_page() -> None:
     requested_pages: list[int] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/auth/signin"):
-            assert request.headers["Accept"] == "application/json"
-            assert request.headers["Content-Type"] == "application/json"
-            return httpx.Response(
-                200,
-                json={"credentials": {"token": "token", "site": {"id": "site-id"}}},
-                request=request,
-            )
-        if request.url.path.endswith("/auth/signout"):
-            return httpx.Response(204, request=request)
-
         assert request.headers["X-Tableau-Auth"] == "token"
         assert request.headers["Accept"] == "application/json"
         page_number = int(request.url.params["pageNumber"])
@@ -45,16 +35,7 @@ def test_list_views_reads_every_page() -> None:
             request=request,
         )
 
-    client = TableauClient(
-        TableauConfig(
-            server="https://tableau.example.com",
-            site_name="site",
-            pat_name="name",
-            pat_value="value",
-            api_version="3.21",
-        ),
-        transport=httpx.MockTransport(respond),
-    )
+    client = TableauClient(_tableau_config(api_version="3.21"), transport=_signed_in_transport(respond))
 
     with client:
         assert client.list_views("workbook-id") == [
@@ -67,14 +48,6 @@ def test_list_views_reads_every_page() -> None:
 
 def test_list_workbooks_reads_json() -> None:
     def respond(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/auth/signin"):
-            return httpx.Response(
-                200,
-                json={"credentials": {"token": "token", "site": {"id": "site-id"}}},
-                request=request,
-            )
-        if request.url.path.endswith("/auth/signout"):
-            return httpx.Response(204, request=request)
         return httpx.Response(
             200,
             json={
@@ -93,15 +66,7 @@ def test_list_workbooks_reads_json() -> None:
             request=request,
         )
 
-    client = TableauClient(
-        TableauConfig(
-            server="https://tableau.example.com",
-            site_name="site",
-            pat_name="name",
-            pat_value="value",
-        ),
-        transport=httpx.MockTransport(respond),
-    )
+    client = TableauClient(_tableau_config(), transport=_signed_in_transport(respond))
 
     with client:
         assert client.list_workbooks() == [
@@ -134,29 +99,13 @@ def test_authenticated_requests_do_not_follow_redirects() -> None:
 
     def respond(request: httpx.Request) -> httpx.Response:
         requested_hosts.append(request.url.host)
-        if request.url.path.endswith("/auth/signin"):
-            return httpx.Response(
-                200,
-                json={"credentials": {"token": "token", "site": {"id": "site-id"}}},
-                request=request,
-            )
-        if request.url.path.endswith("/auth/signout"):
-            return httpx.Response(204, request=request)
         return httpx.Response(
             302,
             headers={"Location": "https://attacker.example/steal"},
             request=request,
         )
 
-    client = TableauClient(
-        TableauConfig(
-            server="https://tableau.example.com",
-            site_name="site",
-            pat_name="name",
-            pat_value="value",
-        ),
-        transport=httpx.MockTransport(respond),
-    )
+    client = TableauClient(_tableau_config(), transport=_signed_in_transport(respond))
 
     with client:
         with pytest.raises(ValueError, match="Tableau API request failed with status 302"):
@@ -166,15 +115,7 @@ def test_authenticated_requests_do_not_follow_redirects() -> None:
 
 
 def test_find_workbook_uses_consistent_name_normalization() -> None:
-    client = TableauClient(
-        TableauConfig(
-            server="https://tableau.example.com",
-            site_name="site",
-            pat_name="name",
-            pat_value="value",
-            api_version="3.21",
-        )
-    )
+    client = TableauClient(_tableau_config(api_version="3.21"))
     workbook = {
         "id": "workbook-id",
         "name": "Sales_Overview",
@@ -188,3 +129,32 @@ def test_find_workbook_uses_consistent_name_normalization() -> None:
             assert client.find_workbook("Sales Overview", "Executive Dashboards") == workbook
     finally:
         client._client.close()
+
+
+def _tableau_config(**overrides: str) -> TableauConfig:
+    return TableauConfig(
+        server="https://tableau.example.com",
+        site_name="site",
+        pat_name="name",
+        pat_value="value",
+        **overrides,
+    )
+
+
+def _signed_in_transport(respond_to_api: Callable[[httpx.Request], httpx.Response]) -> httpx.MockTransport:
+    """Answer the signin/signout handshake and delegate every other request to `respond_to_api`."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/auth/signin"):
+            assert request.headers["Accept"] == "application/json"
+            assert request.headers["Content-Type"] == "application/json"
+            return httpx.Response(
+                200,
+                json={"credentials": {"token": "token", "site": {"id": "site-id"}}},
+                request=request,
+            )
+        if request.url.path.endswith("/auth/signout"):
+            return httpx.Response(204, request=request)
+        return respond_to_api(request)
+
+    return httpx.MockTransport(respond)

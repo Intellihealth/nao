@@ -17,22 +17,18 @@ def test_discover_tests_is_recursive(tmp_path):
     assert names == {"mrr", "uptime"}
 
 
-def test_from_yaml_reads_the_database_field(tmp_path):
+@pytest.mark.parametrize(
+    ("database_line", "expected_database"),
+    [("database: bigquery-prod\n", "bigquery-prod"), ("", None)],
+    ids=["reads_the_database_field", "leaves_database_unset_when_absent"],
+)
+def test_from_yaml_database(tmp_path, database_line, expected_database):
     test_file = tmp_path / "revenue.yml"
-    test_file.write_text("prompt: total revenue\nsql: select 1\ndatabase: bigquery-prod\n")
+    test_file.write_text(f"prompt: total revenue\nsql: select 1\n{database_line}")
 
     case = NaoTestCase.from_yaml(test_file)
 
-    assert case.database == "bigquery-prod"
-
-
-def test_from_yaml_leaves_database_unset_when_absent(tmp_path):
-    test_file = tmp_path / "revenue.yml"
-    test_file.write_text("prompt: total revenue\nsql: select 1\n")
-
-    case = NaoTestCase.from_yaml(test_file)
-
-    assert case.database is None
+    assert case.database == expected_database
 
 
 def test_discover_tests_ignores_outputs_dir(tmp_path):
