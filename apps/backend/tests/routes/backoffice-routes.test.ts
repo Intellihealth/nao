@@ -8,20 +8,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/db/db', async () => {
-	const { default: Database } = await import('better-sqlite3');
-	const { drizzle } = await import('drizzle-orm/better-sqlite3');
-	const { generateSQLiteDrizzleJson, generateSQLiteMigration } = await import('drizzle-kit/api');
-	const sqliteSchema = await import('../../src/db/sqlite-schema');
-	const sqlite = new Database(':memory:');
-	const statements = await generateSQLiteMigration(
-		await generateSQLiteDrizzleJson({}),
-		await generateSQLiteDrizzleJson(sqliteSchema),
-	);
-	for (const statement of statements) {
-		sqlite.exec(statement);
-	}
-	sqlite.pragma('foreign_keys = ON');
-	return { db: drizzle(sqlite, { schema: sqliteSchema }) };
+	const { createInMemoryDb } = await import('../helpers/in-memory-db');
+	return { db: await createInMemoryDb() };
 });
 
 vi.mock('../../src/services/context-explorer-git.service', () => ({

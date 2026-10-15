@@ -1,6 +1,4 @@
-import fs from 'node:fs';
-
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import s from '../../src/db/abstractSchema';
 import { db } from '../../src/db/db';
@@ -8,26 +6,9 @@ import { getProjectLlmConfigByProvider, upsertProjectLlmConfig } from '../../src
 import type { ModelSettingsMap } from '../../src/types/llm';
 import { getDefaultModelId, getProjectAvailableModels } from '../../src/utils/llm';
 
-const TEST_DB_PATH = vi.hoisted(() => './model-settings-test.sqlite');
-
 vi.mock('../../src/db/db', async () => {
-	const { default: Database } = await import('better-sqlite3');
-	const { drizzle } = await import('drizzle-orm/better-sqlite3');
-	const { generateSQLiteDrizzleJson, generateSQLiteMigration } = await import('drizzle-kit/api');
-	const sqliteSchema = await import('../../src/db/sqlite-schema');
-	const { default: fsModule } = await import('node:fs');
-
-	fsModule.rmSync(TEST_DB_PATH, { force: true });
-	const sqlite = new Database(TEST_DB_PATH);
-	const statements = await generateSQLiteMigration(
-		await generateSQLiteDrizzleJson({}),
-		await generateSQLiteDrizzleJson(sqliteSchema),
-	);
-	for (const statement of statements) {
-		sqlite.exec(statement);
-	}
-	sqlite.pragma('foreign_keys = ON');
-	return { db: drizzle(sqlite, { schema: sqliteSchema }) };
+	const { createInMemoryDb } = await import('../helpers/in-memory-db');
+	return { db: await createInMemoryDb() };
 });
 
 const projectId = 'test-project-model-settings';
@@ -42,11 +23,6 @@ describe('project_llm_config model settings round-trip (sqlite)', () => {
 		await db
 			.insert(s.project)
 			.values({ id: projectId, name: 'Model Settings Test', type: 'local', path: '/tmp/model-settings-test' });
-	});
-
-	afterAll(() => {
-		db.$client.close();
-		fs.rmSync(TEST_DB_PATH, { force: true });
 	});
 
 	it('has a non-null model_settings column defaulting to an empty object', () => {

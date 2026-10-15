@@ -10,27 +10,8 @@ import * as storyFileQueries from '../../src/queries/story-file.queries';
 import type { ToolContext } from '../../src/types/tools';
 
 vi.mock('../../src/db/db', async () => {
-	const { default: Database } = await import('better-sqlite3');
-	const { drizzle } = await import('drizzle-orm/better-sqlite3');
-	const { generateSQLiteDrizzleJson, generateSQLiteMigration } = await import('drizzle-kit/api');
-	const sqliteSchema = await import('../../src/db/sqlite-schema');
-
-	const sqlite = new Database(':memory:');
-	const statements = await generateSQLiteMigration(
-		await generateSQLiteDrizzleJson({}),
-		await generateSQLiteDrizzleJson(sqliteSchema),
-	);
-	for (const statement of statements) {
-		sqlite.exec(statement);
-	}
-	sqlite.pragma('foreign_keys = ON');
-
-	const database = drizzle(sqlite, { schema: sqliteSchema });
-	return {
-		db: Object.assign(database, {
-			transaction: (run: (tx: typeof database) => Promise<unknown>) => run(database),
-		}),
-	};
+	const { createInMemoryDbWithInlineTransactions } = await import('../helpers/in-memory-db');
+	return { db: await createInMemoryDbWithInlineTransactions() };
 });
 
 vi.mock('../../src/services/story-mount', async (importOriginal) => ({
