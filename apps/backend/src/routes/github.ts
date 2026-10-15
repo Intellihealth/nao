@@ -34,14 +34,19 @@ export const githubRoutes = async (app: App) => {
 	});
 
 	app.get('/callback', async (request, reply) => {
-		const { code, state } = request.query as { code?: string; state?: string };
+		const { code, state, error, error_description } = request.query as {
+			code?: string;
+			state?: string;
+			error?: string;
+			error_description?: string;
+		};
 		if (!code || !state) {
-			return reply.redirect('/settings/organization?github=error&reason=missing_params');
+			return reply.type('text/html').send(githubOAuthErrorPage(error ?? 'missing_params', error_description));
 		}
 
 		const session = await getSession(convertHeaders(request.headers));
 		if (!session?.user) {
-			return reply.redirect('/settings/organization?github=error&reason=unauthorized');
+			return reply.type('text/html').send(githubOAuthErrorPage('unauthorized'));
 		}
 
 		let userId: string;
@@ -58,12 +63,12 @@ export const githubRoutes = async (app: App) => {
 			const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
 			userId = decoded.userId;
 			returnTo = normalizeReturnTo(decoded.returnTo);
-		} catch {
-			return reply.redirect('/settings/organization?github=error&reason=invalid_state');
+		} catch (error) {
+			return reply.type('text/html').send(githubOAuthErrorPage('invalid_state', getErrorMessage(error)));
 		}
 
 		if (session.user.id !== userId) {
-			return reply.redirect('/settings/organization?github=error&reason=user_mismatch');
+			return reply.type('text/html').send(githubOAuthErrorPage('user_mismatch'));
 		}
 
 		try {
@@ -76,19 +81,50 @@ export const githubRoutes = async (app: App) => {
 				source: 'http',
 				context: { error: details },
 			});
-			const params = new URLSearchParams({
-				github: 'error',
-				reason: 'exchange_failed',
-				details: details.slice(0, 1000),
-			});
-			return reply.redirect(`${returnTo}?${params.toString()}`);
+			return reply.type('text/html').send(githubOAuthErrorPage('exchange_failed', details));
 		}
 	});
 };
+
+export function githubOAuthErrorPage(reason: string, details?: string): string {
+	const message = details ? `${reason}: ${details}` : reason;
+	return `<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>GitHub connection failed</title>
+</head>
+<body style="margin:0;background:#0f0f12;color:#f5f5f5;font-family:system-ui,sans-serif">
+	<main style="max-width:680px;margin:64px auto;padding:24px">
+		<h1 style="font-size:20px;margin:0 0 12px">GitHub connection failed</h1>
+		<p style="color:#a1a1aa;margin:0 0 16px">This temporary debug window will remain open.</p>
+		<pre style="white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #3f3f46;border-radius:10px;background:#18181b;padding:16px">${escapeHtml(message.slice(0, 2000))}</pre>
+	</main>
+</body>
+</html>`;
+}
 
 function normalizeReturnTo(value: unknown): string {
 	if (typeof value !== 'string' || (!value.startsWith('/settings/') && value !== '/onboarding')) {
 		return '/settings/organization';
 	}
 	return value.split('?', 1)[0];
+}
+
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function escapeHtml(value: string): string {
+	return value.replace(/[&<>"']/g, (character) => {
+		const entities: Record<string, string> = {
+			'&': '&amp;',
+			'<': '&lt;',
+			'>': '&gt;',
+			'"': '&quot;',
+			"'": '&#39;',
+		};
+		return entities[character];
+	});
 }

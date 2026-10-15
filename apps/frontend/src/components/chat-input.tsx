@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, PencilRuler, Database, Paperclip, AlertTriangle, Shield, Check } from 'lucide-react';
 import { ATTACHMENT_ACCEPT } from '@nao/shared/attachments';
@@ -43,6 +43,7 @@ import { useEffectiveUserGroupFeatures } from '@/hooks/use-effective-user-group-
 import { SelectionCitationBanner } from '@/components/selection-citation-banner';
 import { ChatInputSuggestions } from '@/components/chat-input-suggestions';
 import { runWithStoryBeforeAgentSend, useStoryBeforeAgentSend } from '@/contexts/story-before-agent-send';
+import { useIsCloud } from '@/hooks/use-nao-mode';
 
 const cycleModelShortcut = getShortcut('cycle-model').shortcut;
 
@@ -712,6 +713,15 @@ function ChatInputPlusMenu({
 	onOpenDatabase: () => void;
 	onFocusPrompt: () => void;
 }) {
+	const locationPath = useRouterState({ select: (s) => s.location.pathname });
+
+	if (locationPath === '/onboarding') {
+		return null;
+	}
+
+	const project = useQuery(trpc.project.getCurrent.queryOptions());
+	const isTrial = useIsCloud() && project.data === null;
+
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
@@ -733,10 +743,12 @@ function ChatInputPlusMenu({
 					requestAnimationFrame(onFocusPrompt);
 				}}
 			>
-				<DropdownMenuItem onSelect={onAddAttachment}>
-					<Paperclip className='size-4' />
-					<span>Attach file</span>
-				</DropdownMenuItem>
+				{!isTrial && (
+					<DropdownMenuItem onSelect={onAddAttachment}>
+						<Paperclip className='size-4' />
+						<span>Attach file</span>
+					</DropdownMenuItem>
+				)}
 				{hasDatabases && (
 					<DropdownMenuItem onSelect={onOpenDatabase}>
 						<Database className='size-4' />

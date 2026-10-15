@@ -36,21 +36,15 @@ import { setActiveProjectId } from '@/lib/active-project';
 import { useSession } from '@/lib/auth-client';
 import { trpc } from '@/main';
 
-const GITHUB_OAUTH_ERROR_MESSAGE = 'nao-github-oauth-error';
-
 interface OnboardingSearch {
 	chatId?: string;
-	github?: 'connected' | 'error';
-	reason?: string;
-	details?: string;
+	github?: 'connected';
 }
 
 export const Route = createFileRoute('/_sidebar-layout/onboarding')({
 	validateSearch: (search: Record<string, unknown>): OnboardingSearch => ({
 		chatId: typeof search.chatId === 'string' ? search.chatId : undefined,
-		github: search.github === 'connected' || search.github === 'error' ? search.github : undefined,
-		reason: typeof search.reason === 'string' ? search.reason : undefined,
-		details: typeof search.details === 'string' ? search.details.slice(0, 1000) : undefined,
+		github: search.github === 'connected' ? 'connected' : undefined,
 	}),
 	component: OnboardingRoute,
 });
@@ -87,7 +81,6 @@ function OnboardingPage() {
 	const queryClient = useQueryClient();
 	const currentProject = useQuery(trpc.project.getCurrent.queryOptions());
 	const search = Route.useSearch();
-	const [githubOAuthError, setGithubOAuthError] = useState(() => getGithubOAuthError(search));
 	const inputAreaRef = useRef<HTMLDivElement>(null);
 	const actionAreaRef = useRef<HTMLDivElement>(null);
 	const githubConnectionReportedRef = useRef(false);
@@ -115,37 +108,13 @@ function OnboardingPage() {
 	const [latestPlaintextDeployKey, setLatestPlaintextDeployKey] = useState<string | null>(null);
 
 	useEffect(() => {
-		const handleGithubOAuthError = (event: MessageEvent) => {
-			if (
-				event.origin === window.location.origin &&
-				event.data?.type === GITHUB_OAUTH_ERROR_MESSAGE &&
-				typeof event.data.error === 'string'
-			) {
-				setGithubOAuthError(event.data.error);
-			}
-		};
-
-		window.addEventListener('message', handleGithubOAuthError);
-		return () => window.removeEventListener('message', handleGithubOAuthError);
-	}, []);
-
-	useEffect(() => {
-		if (!search.github || !window.opener) {
+		if (search.github !== 'connected') {
 			return;
 		}
 
-		if (search.github === 'error') {
-			window.opener.postMessage(
-				{
-					type: GITHUB_OAUTH_ERROR_MESSAGE,
-					error: getGithubOAuthError(search) ?? 'Unknown GitHub OAuth error',
-				},
-				window.location.origin,
-			);
-		}
-		window.opener.focus();
+		window.opener?.focus();
 		window.close();
-	}, [search]);
+	}, [search.github]);
 
 	useEffect(() => {
 		if (
@@ -276,34 +245,24 @@ function OnboardingPage() {
 							{githubAvailable.isPending ? (
 								<p className='text-sm text-muted-foreground'>Checking GitHub availability…</p>
 							) : githubAvailable.data ? (
-								<>
-									<ImportProviderCard
-										providerLabel='GitHub'
-										icon={Github}
-										connectHref='/api/github/connect?returnTo=%2Fonboarding'
-										connectTarget='github-oauth'
-										resourceNounSingular='repository'
-										resourceNounPlural='repositories'
-										connected={githubStatus.data?.connected === true}
-										compact={true}
-										className='border-violet/20 bg-muted/20 [&_[data-slot=button]]:rounded-full'
-										pickerDialogStyle={importDialogStyle}
-										Picker={GitHubRepoPicker}
-										onImported={(project) =>
-											queueOrSendMessage({
-												text: `GitHub repository imported successfully as "${project.projectName}".`,
-											}).catch(console.error)
-										}
-									/>
-									{githubOAuthError && (
-										<div className='mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs'>
-											<p className='font-medium text-destructive'>GitHub connection failed</p>
-											<code className='mt-1 block break-all bg-transparent p-0 text-destructive'>
-												{githubOAuthError}
-											</code>
-										</div>
-									)}
-								</>
+								<ImportProviderCard
+									providerLabel='GitHub'
+									icon={Github}
+									connectHref='/api/github/connect?returnTo=%2Fonboarding'
+									connectTarget='github-oauth'
+									resourceNounSingular='repository'
+									resourceNounPlural='repositories'
+									connected={githubStatus.data?.connected === true}
+									compact={true}
+									className='border-violet/20 bg-muted/20 [&_[data-slot=button]]:rounded-full'
+									pickerDialogStyle={importDialogStyle}
+									Picker={GitHubRepoPicker}
+									onImported={(project) =>
+										queueOrSendMessage({
+											text: `GitHub repository imported successfully as "${project.projectName}".`,
+										}).catch(console.error)
+									}
+								/>
 							) : (
 								<p className='text-sm text-muted-foreground'>
 									GitHub OAuth is not configured for this nao instance.
@@ -394,11 +353,4 @@ function OnboardingPage() {
 			)}
 		</div>
 	);
-}
-
-function getGithubOAuthError(search: OnboardingSearch): string | null {
-	if (search.github !== 'error') {
-		return null;
-	}
-	return [search.reason, search.details].filter(Boolean).join(': ') || 'Unknown GitHub OAuth error';
 }
