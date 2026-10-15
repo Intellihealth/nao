@@ -53,10 +53,14 @@ describe('GET /i/:imageId', () => {
 		await app.close();
 	});
 
+	function requestImage() {
+		return app.inject({ method: 'GET', url: `/i/${IMAGE_ID}` });
+	}
+
 	it('refuses an anonymous request', async () => {
 		mocks.authenticatedUserId = null;
 
-		const res = await app.inject({ method: 'GET', url: `/i/${IMAGE_ID}` });
+		const res = await requestImage();
 		expect(res.statusCode).toBe(401);
 		expect(mocks.getImageById).not.toHaveBeenCalled();
 	});
@@ -64,7 +68,7 @@ describe('GET /i/:imageId', () => {
 	it("refuses a signed-in user who can't open any chat holding the image", async () => {
 		mocks.canUserViewChatContent.mockResolvedValue(false);
 
-		const res = await app.inject({ method: 'GET', url: `/i/${IMAGE_ID}` });
+		const res = await requestImage();
 		expect(res.statusCode).toBe(404);
 		expect(mocks.canUserViewChatContent).toHaveBeenCalledWith('chat-1', 'project-1', 'viewer-id');
 		expect(mocks.getImageById).not.toHaveBeenCalled();
@@ -73,7 +77,7 @@ describe('GET /i/:imageId', () => {
 	it('serves the image privately to a user who can open the chat', async () => {
 		mocks.canUserViewChatContent.mockResolvedValue(true);
 
-		const res = await app.inject({ method: 'GET', url: `/i/${IMAGE_ID}` });
+		const res = await requestImage();
 		expect(res.statusCode).toBe(200);
 		expect(res.headers['content-type']).toBe('image/png');
 		expect(res.headers['cache-control']).toContain('private');

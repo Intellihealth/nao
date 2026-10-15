@@ -26,30 +26,12 @@ describe('addPromptCache', () => {
 		{ role: 'user', content: 'Question' },
 	];
 
-	it('uses Anthropic cache control for direct Anthropic models', () => {
-		const cached = addPromptCache(messages, modelSelection('anthropic', 'claude-sonnet-4.5'));
-
-		expect(cached[0].providerOptions).toEqual({
-			anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } },
-		});
-		expect(cached[1].providerOptions).toEqual({
-			anthropic: { cacheControl: { type: 'ephemeral' } },
-		});
-	});
-
-	it('uses Anthropic cache control for Vertex Claude models', () => {
-		const cached = addPromptCache(messages, modelSelection('vertex', 'claude-sonnet-4.5'));
-
-		expect(cached[0].providerOptions).toEqual({
-			anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } },
-		});
-		expect(cached[1].providerOptions).toEqual({
-			anthropic: { cacheControl: { type: 'ephemeral' } },
-		});
-	});
-
-	it('uses Anthropic cache control for OpenRouter Claude models', () => {
-		const cached = addPromptCache(messages, modelSelection('openrouter', 'anthropic/claude-haiku-4.5'));
+	it.each([
+		['direct Anthropic models', modelSelection('anthropic', 'claude-sonnet-4.5')],
+		['Vertex Claude models', modelSelection('vertex', 'claude-sonnet-4.5')],
+		['OpenRouter Claude models', modelSelection('openrouter', 'anthropic/claude-haiku-4.5')],
+	])('uses Anthropic cache control for %s', (_name, model) => {
+		const cached = addPromptCache(messages, model);
 
 		expect(cached[0].providerOptions).toEqual({
 			anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } },
@@ -74,15 +56,16 @@ describe('addPromptCache', () => {
 		});
 	});
 
-	it('uses Bedrock cache points for Anthropic inference profile ARNs', () => {
-		const modelId = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6';
-
-		expect(getPromptCacheProvider(modelSelection('bedrock', modelId))).toBe('bedrock');
-	});
-
-	it('uses Bedrock cache points for custom profile ARNs that identify Claude', () => {
-		const modelId = 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/analytics-claude-prod';
-
+	it.each([
+		[
+			'Anthropic inference profile ARNs',
+			'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6',
+		],
+		[
+			'custom profile ARNs that identify Claude',
+			'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/analytics-claude-prod',
+		],
+	])('uses Bedrock cache points for %s', (_name, modelId) => {
 		expect(getPromptCacheProvider(modelSelection('bedrock', modelId))).toBe('bedrock');
 	});
 

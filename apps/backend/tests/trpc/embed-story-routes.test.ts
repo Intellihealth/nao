@@ -17,6 +17,8 @@ vi.mock('../../src/utils/analytics-event', () => ({
 
 import { embedRoutes } from '../../src/trpc/embed.routes';
 
+const caller = embedRoutes.createCaller({} as never);
+
 describe('public embedded Story routes', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -34,8 +36,6 @@ describe('public embedded Story routes', () => {
 	});
 
 	it('loads the public embed view through the guarded utility', async () => {
-		const caller = embedRoutes.createCaller({} as never);
-
 		await expect(caller.getStory({ storyId: 'story-1', token: 'token' })).resolves.toMatchObject({
 			id: 'story-1',
 			queryData: { query_orders: { columns: ['id'], data: [{ id: 1 }] } },
@@ -44,8 +44,6 @@ describe('public embedded Story routes', () => {
 	});
 
 	it('loads public downloads through the guarded utility', async () => {
-		const caller = embedRoutes.createCaller({} as never);
-
 		await expect(caller.downloadStory({ storyId: 'story-1', token: 'token', format: 'pdf' })).resolves.toEqual({
 			filename: 'orders.pdf',
 		});

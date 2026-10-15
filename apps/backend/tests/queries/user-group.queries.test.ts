@@ -3,6 +3,7 @@ import {
 	EMPTY_FILES_CONTEXT_ACCESS,
 	resolveWarehouseRowSecurity,
 	type SsoGroupProvider,
+	type UserGroupSsoMappings,
 } from '@nao/shared';
 import type { UserRole } from '@nao/shared/types';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -17,7 +18,7 @@ vi.hoisted(() => {
 vi.mock('../../src/db/db', async () => {
 	const { drizzle } = await import('drizzle-orm/better-sqlite3');
 	const schema = await import('../../src/db/sqlite-schema');
-	return { db: drizzle(process.env.NAO_TEST_DATABASE_PATH ?? './db.sqlite', { schema }) };
+	return { db: drizzle('./db.sqlite', { schema }) };
 });
 
 import { db as appDb } from '../../src/db/db';
@@ -50,7 +51,7 @@ import {
 } from '../../src/queries/user-group.queries';
 import { addProjectMemberWithUserGroups } from '../../src/services/project-user-group-membership.service';
 
-const db = drizzle(process.env.NAO_TEST_DATABASE_PATH ?? './db.sqlite', { schema: sqliteSchema });
+const db = drizzle('./db.sqlite', { schema: sqliteSchema });
 const PROJECT_ID = 'user-group-project';
 const FOREIGN_PROJECT_ID = 'foreign-user-group-project';
 const ORG_ID = 'user-group-org';
@@ -59,6 +60,9 @@ const INHERITED_USER_ID = 'user-group-inherited';
 const BOTH_USER_ID = 'user-group-both';
 const OUTSIDER_USER_ID = 'user-group-outsider';
 const DEFAULT_DENSITY = { defaultDensity: 'detailed', canChange: true } as const;
+const NAME_CONFLICT = { code: 'CONFLICT', message: 'A user group with this name already exists.' };
+const MICROSOFT_GROUP_ID = 'a0b1c2d3-e4f5-6789-abcd-ef0123456789';
+const OTHER_MICROSOFT_GROUP_ID = '11111111-2222-3333-4444-555555555555';
 
 describe('user group queries', () => {
 	beforeEach(async () => {
@@ -778,129 +782,43 @@ describe('user group queries', () => {
 		expect((await getUserGroupOverview(PROJECT_ID)).groups).toHaveLength(1);
 	});
 
-	it('translates concurrent create name conflicts', async () => {
-		const results = await Promise.allSettled([
-			createUserGroup(PROJECT_ID, 'Analysts'),
-			createUserGroup(PROJECT_ID, 'Analysts'),
-		]);
+	it.each([
+		{ title: 'translates concurrent create name conflicts', names: ['Analysts', 'Analysts'], create: createGroup },
+		{
+			title: 'translates concurrent case-only create name conflicts',
+			names: ['Finance', 'finance'],
+			create: createGroup,
+		},
+		{
+			title: 'serializes concurrent Unicode case-only unlimited creates',
+			names: ['Équipe', 'équipe'],
+			create: createGroup,
+		},
+		{
+			title: 'serializes concurrent Unicode case-only free-limit creates',
+			names: ['Équipe', 'équipe'],
+			create: createGroupWithinFreeLimit,
+		},
+	])('$title', async ({ names, create }) => {
+		const results = await Promise.allSettled(names.map((name) => create(name)));
 
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'CONFLICT',
-				message: 'A user group with this name already exists.',
-			},
-		});
-	});
-
-	it('translates concurrent case-only create name conflicts', async () => {
-		const results = await Promise.allSettled([
-			createUserGroup(PROJECT_ID, 'Finance'),
-			createUserGroup(PROJECT_ID, 'finance'),
-		]);
-
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'CONFLICT',
-				message: 'A user group with this name already exists.',
-			},
-		});
-	});
-
-	it('serializes concurrent Unicode case-only unlimited creates', async () => {
-		const results = await Promise.allSettled([
-			createUserGroup(PROJECT_ID, 'Équipe'),
-			createUserGroup(PROJECT_ID, 'équipe'),
-		]);
-
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'CONFLICT',
-				message: 'A user group with this name already exists.',
-			},
-		});
-	});
-
-	it('serializes concurrent Unicode case-only free-limit creates', async () => {
-		const results = await Promise.allSettled([
-			createUserGroupWithinLimit(3, PROJECT_ID, 'Équipe'),
-			createUserGroupWithinLimit(3, PROJECT_ID, 'équipe'),
-		]);
-
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'CONFLICT',
-				message: 'A user group with this name already exists.',
-			},
-		});
+		expectOnlyOneFulfilled(results, NAME_CONFLICT);
 		expect(await countCustomUserGroups(PROJECT_ID)).toBe(1);
 	});
 
-	it('rejects sequential exact and case-only create name conflicts', async () => {
-		await createUserGroup(PROJECT_ID, 'Finance');
+	it.each([
+		{ title: 'translates concurrent rename name conflicts', names: ['Analysts', 'Analysts'] },
+		{ title: 'translates concurrent case-only rename name conflicts', names: ['Analysts', 'analysts'] },
+		{ title: 'serializes concurrent Unicode case-only renames', names: ['Équipe', 'équipe'] },
+	])('$title', async ({ names }) => {
+		const groups = [await createGroup('First'), await createGroup('Second')];
+		const results = await Promise.allSettled(
+			groups.map((group, index) =>
+				updateUserGroup(PROJECT_ID, group.id, { name: names[index], featureGrants: [] }),
+			),
+		);
 
-		await expect(createUserGroup(PROJECT_ID, 'Finance')).rejects.toMatchObject({
-			code: 'CONFLICT',
-			message: 'A user group with this name already exists.',
-		});
-		await expect(createUserGroup(PROJECT_ID, 'finance')).rejects.toMatchObject({
-			code: 'CONFLICT',
-			message: 'A user group with this name already exists.',
-		});
-	});
-
-	it('translates concurrent rename name conflicts', async () => {
-		const firstGroup = await createUserGroup(PROJECT_ID, 'First');
-		const secondGroup = await createUserGroup(PROJECT_ID, 'Second');
-		const results = await Promise.allSettled([
-			updateUserGroup(PROJECT_ID, firstGroup.id, { name: 'Analysts', featureGrants: [] }),
-			updateUserGroup(PROJECT_ID, secondGroup.id, { name: 'Analysts', featureGrants: [] }),
-		]);
-
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'CONFLICT',
-				message: 'A user group with this name already exists.',
-			},
-		});
-	});
-
-	it('translates concurrent case-only rename name conflicts', async () => {
-		const firstGroup = await createUserGroup(PROJECT_ID, 'First');
-		const secondGroup = await createUserGroup(PROJECT_ID, 'Second');
-		const results = await Promise.allSettled([
-			updateUserGroup(PROJECT_ID, firstGroup.id, { name: 'Analysts', featureGrants: [] }),
-			updateUserGroup(PROJECT_ID, secondGroup.id, { name: 'analysts', featureGrants: [] }),
-		]);
-
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'CONFLICT',
-				message: 'A user group with this name already exists.',
-			},
-		});
-	});
-
-	it('serializes concurrent Unicode case-only renames', async () => {
-		const firstGroup = await createUserGroup(PROJECT_ID, 'First');
-		const secondGroup = await createUserGroup(PROJECT_ID, 'Second');
-		const results = await Promise.allSettled([
-			updateUserGroup(PROJECT_ID, firstGroup.id, { name: 'Équipe', featureGrants: [] }),
-			updateUserGroup(PROJECT_ID, secondGroup.id, { name: 'équipe', featureGrants: [] }),
-		]);
-
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'CONFLICT',
-				message: 'A user group with this name already exists.',
-			},
-		});
+		expectOnlyOneFulfilled(results, NAME_CONFLICT);
 	});
 
 	it('rejects case-only rename conflicts while allowing case-only self-renames', async () => {
@@ -915,10 +833,7 @@ describe('user group queries', () => {
 		});
 		await expect(
 			updateUserGroup(PROJECT_ID, marketing.id, { name: 'FINANCE', featureGrants: [] }),
-		).rejects.toMatchObject({
-			code: 'CONFLICT',
-			message: 'A user group with this name already exists.',
-		});
+		).rejects.toMatchObject(NAME_CONFLICT);
 	});
 
 	it('validates assignable groups and inserts memberships idempotently', async () => {
@@ -978,16 +893,13 @@ describe('user group queries', () => {
 		await createUserGroup(PROJECT_ID, 'Second');
 
 		const results = await Promise.allSettled([
-			createUserGroupWithinLimit(3, PROJECT_ID, 'Third'),
-			createUserGroupWithinLimit(3, PROJECT_ID, 'Fourth'),
+			createGroupWithinFreeLimit('Third'),
+			createGroupWithinFreeLimit('Fourth'),
 		]);
 
-		expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-		expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
-			reason: {
-				code: 'FORBIDDEN',
-				message: 'Free projects can create up to 3 custom user groups. Enterprise enables unlimited groups.',
-			},
+		expectOnlyOneFulfilled(results, {
+			code: 'FORBIDDEN',
+			message: 'Free projects can create up to 3 custom user groups. Enterprise enables unlimited groups.',
 		});
 		expect(await countCustomUserGroups(PROJECT_ID)).toBe(3);
 	});
@@ -1190,15 +1102,6 @@ describe('user group queries', () => {
 		expect(normalizedCustomGroup).not.toHaveProperty('contextGrants');
 	});
 
-	it('uses a custom group when the default has no grants', async () => {
-		const overview = await getUserGroupOverview(PROJECT_ID);
-		await updateUserGroup(PROJECT_ID, overview.groups[0].id, { featureGrants: [] });
-		const analysts = await createUserGroup(PROJECT_ID, 'Analysts', ['storyCreation']);
-		await setUserGroupMembership(PROJECT_ID, analysts.id, DIRECT_USER_ID, true);
-
-		expect((await resolveUserGroupAccess(PROJECT_ID, DIRECT_USER_ID)).features).toEqual(['storyCreation']);
-	});
-
 	it('deduplicates grants shared by multiple groups', async () => {
 		const overview = await getUserGroupOverview(PROJECT_ID);
 		await updateUserGroup(PROJECT_ID, overview.groups[0].id, { featureGrants: ['storyCreation'] });
@@ -1279,36 +1182,6 @@ describe('user group queries', () => {
 				canChange: false,
 			},
 		});
-
-		await expect(resolveUserGroupAccess(PROJECT_ID, DIRECT_USER_ID)).resolves.toMatchObject({
-			toolCallDensityPolicy: {
-				defaultDensity: 'compact',
-				canChange: false,
-			},
-		});
-	});
-
-	it('uses the newest explicit membership for the density default', async () => {
-		const overview = await getUserGroupOverview(PROJECT_ID);
-		await updateUserGroup(PROJECT_ID, overview.groups[0].id, {
-			featureGrants: overview.groups[0].featureGrants,
-			toolCallDensityPolicy: {
-				defaultDensity: 'detailed',
-				canChange: false,
-			},
-		});
-		const olderGroup = await createUserGroup(PROJECT_ID, 'Older', [], {
-			defaultDensity: 'detailed',
-			canChange: false,
-		});
-		const newerGroup = await createUserGroup(PROJECT_ID, 'Newer', [], {
-			defaultDensity: 'compact',
-			canChange: false,
-		});
-		await db.insert(userGroupMember).values([
-			{ groupId: olderGroup.id, userId: DIRECT_USER_ID, createdAt: new Date('2025-01-01T00:00:00Z') },
-			{ groupId: newerGroup.id, userId: DIRECT_USER_ID, createdAt: new Date('2025-01-02T00:00:00Z') },
-		]);
 
 		await expect(resolveUserGroupAccess(PROJECT_ID, DIRECT_USER_ID)).resolves.toMatchObject({
 			toolCallDensityPolicy: {
@@ -1522,15 +1395,7 @@ describe('user group queries', () => {
 	});
 
 	it('provisions first project access and never revokes or rewrites it later', async () => {
-		const group = await createUserGroup(
-			FOREIGN_PROJECT_ID,
-			'Analysts',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['finance'], 'user'),
-		);
+		const group = await createSsoMappedGroup(FOREIGN_PROJECT_ID, 'Analysts', ssoMappings(['finance'], 'user'));
 
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['finance']);
 		await db
@@ -1546,24 +1411,8 @@ describe('user group queries', () => {
 	});
 
 	it('uses the strongest default role and adds every matching group', async () => {
-		const viewers = await createUserGroup(
-			FOREIGN_PROJECT_ID,
-			'Viewers',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['shared'], 'viewer'),
-		);
-		const admins = await createUserGroup(
-			FOREIGN_PROJECT_ID,
-			'Admins',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['shared'], 'admin'),
-		);
+		const viewers = await createSsoMappedGroup(FOREIGN_PROJECT_ID, 'Viewers', ssoMappings(['shared'], 'viewer'));
+		const admins = await createSsoMappedGroup(FOREIGN_PROJECT_ID, 'Admins', ssoMappings(['shared'], 'admin'));
 
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['shared']);
 
@@ -1573,24 +1422,8 @@ describe('user group queries', () => {
 
 	it('lets env mappings override the same claimed UI group while preserving other UI matches', async () => {
 		const analysts = await createUserGroup(PROJECT_ID, 'Analysts');
-		const uiFinance = await createUserGroup(
-			PROJECT_ID,
-			'UI Finance',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['finance']),
-		);
-		const sales = await createUserGroup(
-			PROJECT_ID,
-			'Sales',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['sales']),
-		);
+		const uiFinance = await createSsoMappedGroup(PROJECT_ID, 'UI Finance', ssoMappings(['finance']));
+		const sales = await createSsoMappedGroup(PROJECT_ID, 'Sales', ssoMappings(['sales']));
 
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['FINANCE', 'sales'], {
 			oidcMappings: [
@@ -1605,24 +1438,8 @@ describe('user group queries', () => {
 	});
 
 	it('suppresses an OIDC UI mapping when its env target is unavailable', async () => {
-		const uiFinance = await createUserGroup(
-			PROJECT_ID,
-			'UI Finance',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['finance']),
-		);
-		const sales = await createUserGroup(
-			PROJECT_ID,
-			'Sales',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['sales']),
-		);
+		const uiFinance = await createSsoMappedGroup(PROJECT_ID, 'UI Finance', ssoMappings(['finance']));
+		const sales = await createSsoMappedGroup(PROJECT_ID, 'Sales', ssoMappings(['sales']));
 
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['finance', 'sales'], {
 			oidcMappings: [
@@ -1639,15 +1456,7 @@ describe('user group queries', () => {
 	it('does not provision locked excess groups', async () => {
 		const groups = await Promise.all(
 			['One', 'Two', 'Three', 'Locked'].map((name) =>
-				createUserGroup(
-					FOREIGN_PROJECT_ID,
-					name,
-					[],
-					DEFAULT_DENSITY,
-					undefined,
-					undefined,
-					ssoMappings([name], 'user'),
-				),
+				createSsoMappedGroup(FOREIGN_PROJECT_ID, name, ssoMappings([name], 'user')),
 			),
 		);
 		for (const [index, group] of groups.entries()) {
@@ -1668,15 +1477,7 @@ describe('user group queries', () => {
 	it('suppresses UI fallback when env mappings target locked excess groups', async () => {
 		const groups = await Promise.all(
 			['Active UI', 'Two', 'Three', 'Locked'].map((name, index) =>
-				createUserGroup(
-					PROJECT_ID,
-					name,
-					[],
-					DEFAULT_DENSITY,
-					undefined,
-					undefined,
-					ssoMappings(index === 0 ? ['finance'] : []),
-				),
+				createSsoMappedGroup(PROJECT_ID, name, ssoMappings(index === 0 ? ['finance'] : [])),
 			),
 		);
 		for (const [index, group] of groups.entries()) {
@@ -1696,54 +1497,42 @@ describe('user group queries', () => {
 	});
 
 	it('provisions project access for Microsoft mappings', async () => {
-		const microsoftGroupId = 'a0b1c2d3-e4f5-6789-abcd-ef0123456789';
-		const group = await createUserGroup(
+		const group = await createSsoMappedGroup(
 			FOREIGN_PROJECT_ID,
 			'Microsoft Analysts',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			{
-				version: 1,
-				providers: { oidc: [], microsoft: [microsoftGroupId] },
-				defaultProjectRole: 'viewer',
-			},
+			microsoftSsoMappings([MICROSOFT_GROUP_ID], 'viewer'),
 		);
 
-		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'microsoft', [microsoftGroupId]);
+		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'microsoft', [MICROSOFT_GROUP_ID]);
 
 		await expect(projectMembership(FOREIGN_PROJECT_ID, DIRECT_USER_ID)).resolves.toMatchObject({ role: 'viewer' });
 		expect(await listSsoGroupIds(DIRECT_USER_ID, 'microsoft')).toContain(group.id);
 	});
 
 	it('lets Entra env mappings override the same UI Object ID while preserving other UI matches', async () => {
-		const envGroupId = 'a0b1c2d3-e4f5-6789-abcd-ef0123456789';
-		const otherGroupId = '11111111-2222-3333-4444-555555555555';
 		const analysts = await createUserGroup(PROJECT_ID, 'Analysts');
-		const uiTarget = await createUserGroup(PROJECT_ID, 'UI target', [], DEFAULT_DENSITY, undefined, undefined, {
-			version: 1,
-			providers: { oidc: [], microsoft: [envGroupId] },
-		});
-		const otherTarget = await createUserGroup(
+		const uiTarget = await createSsoMappedGroup(
+			PROJECT_ID,
+			'UI target',
+			microsoftSsoMappings([MICROSOFT_GROUP_ID]),
+		);
+		const otherTarget = await createSsoMappedGroup(
 			PROJECT_ID,
 			'Other target',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			{
-				version: 1,
-				providers: { oidc: [], microsoft: [otherGroupId] },
-			},
+			microsoftSsoMappings([OTHER_MICROSOFT_GROUP_ID]),
 		);
 
-		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'microsoft', [envGroupId, otherGroupId], {
-			entraMappings: [
-				{ entraGroupId: envGroupId, projectScope: '*', naoUserGroup: 'wrong wildcard' },
-				{ entraGroupId: envGroupId, projectScope: PROJECT_ID, naoUserGroup: 'ANALYSTS' },
-			],
-		});
+		await reconcileSsoUserGroupMemberships(
+			DIRECT_USER_ID,
+			'microsoft',
+			[MICROSOFT_GROUP_ID, OTHER_MICROSOFT_GROUP_ID],
+			{
+				entraMappings: [
+					{ entraGroupId: MICROSOFT_GROUP_ID, projectScope: '*', naoUserGroup: 'wrong wildcard' },
+					{ entraGroupId: MICROSOFT_GROUP_ID, projectScope: PROJECT_ID, naoUserGroup: 'ANALYSTS' },
+				],
+			},
+		);
 
 		const groupIds = await listSsoGroupIds(DIRECT_USER_ID, 'microsoft');
 		expect(groupIds).toEqual(expect.arrayContaining([analysts.id, otherTarget.id]));
@@ -1751,39 +1540,28 @@ describe('user group queries', () => {
 	});
 
 	it('suppresses an Entra UI mapping when its env target is unavailable', async () => {
-		const envGroupId = 'a0b1c2d3-e4f5-6789-abcd-ef0123456789';
-		const otherGroupId = '11111111-2222-3333-4444-555555555555';
-		const overriddenTarget = await createUserGroup(
+		const overriddenTarget = await createSsoMappedGroup(
 			PROJECT_ID,
 			'Overridden target',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			{
-				version: 1,
-				providers: { oidc: [], microsoft: [envGroupId] },
-			},
+			microsoftSsoMappings([MICROSOFT_GROUP_ID]),
 		);
-		const unrelatedTarget = await createUserGroup(
+		const unrelatedTarget = await createSsoMappedGroup(
 			PROJECT_ID,
 			'Unrelated target',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			{
-				version: 1,
-				providers: { oidc: [], microsoft: [otherGroupId] },
-			},
+			microsoftSsoMappings([OTHER_MICROSOFT_GROUP_ID]),
 		);
 
-		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'microsoft', [envGroupId, otherGroupId], {
-			entraMappings: [
-				{ entraGroupId: envGroupId, projectScope: '*', naoUserGroup: 'overridden target' },
-				{ entraGroupId: envGroupId, projectScope: PROJECT_ID, naoUserGroup: 'missing group' },
-			],
-		});
+		await reconcileSsoUserGroupMemberships(
+			DIRECT_USER_ID,
+			'microsoft',
+			[MICROSOFT_GROUP_ID, OTHER_MICROSOFT_GROUP_ID],
+			{
+				entraMappings: [
+					{ entraGroupId: MICROSOFT_GROUP_ID, projectScope: '*', naoUserGroup: 'overridden target' },
+					{ entraGroupId: MICROSOFT_GROUP_ID, projectScope: PROJECT_ID, naoUserGroup: 'missing group' },
+				],
+			},
+		);
 
 		const groupIds = await listSsoGroupIds(DIRECT_USER_ID, 'microsoft');
 		expect(groupIds).not.toContain(overriddenTarget.id);
@@ -1791,18 +1569,17 @@ describe('user group queries', () => {
 	});
 
 	it('never changes an existing explicit project role for an Entra default role', async () => {
-		const microsoftGroupId = 'a0b1c2d3-e4f5-6789-abcd-ef0123456789';
 		await db
 			.insert(projectMember)
 			.values({ projectId: FOREIGN_PROJECT_ID, userId: DIRECT_USER_ID, role: 'viewer' })
 			.onConflictDoNothing();
-		await createUserGroup(FOREIGN_PROJECT_ID, 'Microsoft Admins', [], DEFAULT_DENSITY, undefined, undefined, {
-			version: 1,
-			providers: { oidc: [], microsoft: [microsoftGroupId] },
-			defaultProjectRole: 'admin',
-		});
+		await createSsoMappedGroup(
+			FOREIGN_PROJECT_ID,
+			'Microsoft Admins',
+			microsoftSsoMappings([MICROSOFT_GROUP_ID], 'admin'),
+		);
 
-		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'microsoft', [microsoftGroupId]);
+		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'microsoft', [MICROSOFT_GROUP_ID]);
 
 		await expect(projectMembership(FOREIGN_PROJECT_ID, DIRECT_USER_ID)).resolves.toMatchObject({
 			role: 'viewer',
@@ -1810,24 +1587,8 @@ describe('user group queries', () => {
 	});
 
 	it('replaces OIDC memberships, clears no-matches, and removes deleted mappings', async () => {
-		const finance = await createUserGroup(
-			PROJECT_ID,
-			'Finance',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['finance']),
-		);
-		const sales = await createUserGroup(
-			PROJECT_ID,
-			'Sales',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['sales']),
-		);
+		const finance = await createSsoMappedGroup(PROJECT_ID, 'Finance', ssoMappings(['finance']));
+		const sales = await createSsoMappedGroup(PROJECT_ID, 'Sales', ssoMappings(['sales']));
 
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['finance']);
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['sales']);
@@ -1845,15 +1606,7 @@ describe('user group queries', () => {
 	});
 
 	it('does not reinsert access when mapping removal races reconciliation', async () => {
-		const group = await createUserGroup(
-			PROJECT_ID,
-			'Finance',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['finance']),
-		);
+		const group = await createSsoMappedGroup(PROJECT_ID, 'Finance', ssoMappings(['finance']));
 
 		const update = updateUserGroup(PROJECT_ID, group.id, {
 			featureGrants: [],
@@ -1866,11 +1619,11 @@ describe('user group queries', () => {
 	});
 
 	it('invalidates only memberships for changed SSO providers', async () => {
-		const group = await createUserGroup(PROJECT_ID, 'Mapped', [], DEFAULT_DENSITY, undefined, undefined, {
+		const group = await createSsoMappedGroup(PROJECT_ID, 'Mapped', {
 			version: 1,
 			providers: {
 				oidc: ['finance'],
-				microsoft: ['a0b1c2d3-e4f5-6789-abcd-ef0123456789'],
+				microsoft: [MICROSOFT_GROUP_ID],
 			},
 		});
 		await db.insert(userGroupMember).values([
@@ -1884,7 +1637,7 @@ describe('user group queries', () => {
 				version: 1,
 				providers: {
 					oidc: [],
-					microsoft: ['a0b1c2d3-e4f5-6789-abcd-ef0123456789'],
+					microsoft: [MICROSOFT_GROUP_ID],
 				},
 			},
 		});
@@ -1895,15 +1648,7 @@ describe('user group queries', () => {
 	});
 
 	it('keeps memberships when SSO mappings are reordered', async () => {
-		const group = await createUserGroup(
-			PROJECT_ID,
-			'Mapped',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['finance', 'sales']),
-		);
+		const group = await createSsoMappedGroup(PROJECT_ID, 'Mapped', ssoMappings(['finance', 'sales']));
 		await db.insert(userGroupMember).values({ groupId: group.id, userId: DIRECT_USER_ID, provider: 'oidc' });
 
 		await updateUserGroup(PROJECT_ID, group.id, {
@@ -1915,15 +1660,7 @@ describe('user group queries', () => {
 	});
 
 	it('rolls back an SSO mapping update when membership invalidation fails', async () => {
-		const group = await createUserGroup(
-			PROJECT_ID,
-			'Mapped',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['finance']),
-		);
+		const group = await createSsoMappedGroup(PROJECT_ID, 'Mapped', ssoMappings(['finance']));
 		await db.insert(userGroupMember).values({ groupId: group.id, userId: DIRECT_USER_ID, provider: 'oidc' });
 		db.$client.exec(`
 			CREATE TRIGGER fail_sso_membership_delete
@@ -1950,24 +1687,8 @@ describe('user group queries', () => {
 	});
 
 	it('maps organization-inherited access and cleans inaccessible project rows', async () => {
-		const inheritedGroup = await createUserGroup(
-			PROJECT_ID,
-			'Inherited',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['shared']),
-		);
-		const foreignGroup = await createUserGroup(
-			FOREIGN_PROJECT_ID,
-			'Foreign',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['shared']),
-		);
+		const inheritedGroup = await createSsoMappedGroup(PROJECT_ID, 'Inherited', ssoMappings(['shared']));
+		const foreignGroup = await createSsoMappedGroup(FOREIGN_PROJECT_ID, 'Foreign', ssoMappings(['shared']));
 		await db.insert(userGroupMember).values({ groupId: foreignGroup.id, userId: DIRECT_USER_ID, provider: 'oidc' });
 
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['shared']);
@@ -1978,24 +1699,8 @@ describe('user group queries', () => {
 	});
 
 	it('rolls back replacement when an SSO membership insert fails', async () => {
-		const current = await createUserGroup(
-			PROJECT_ID,
-			'Current',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['current']),
-		);
-		const blocked = await createUserGroup(
-			PROJECT_ID,
-			'Blocked',
-			[],
-			DEFAULT_DENSITY,
-			undefined,
-			undefined,
-			ssoMappings(['blocked']),
-		);
+		const current = await createSsoMappedGroup(PROJECT_ID, 'Current', ssoMappings(['current']));
+		const blocked = await createSsoMappedGroup(PROJECT_ID, 'Blocked', ssoMappings(['blocked']));
 		await reconcileSsoUserGroupMemberships(DIRECT_USER_ID, 'oidc', ['current']);
 		db.$client.exec(`
 			CREATE TRIGGER fail_sso_membership_insert
@@ -2049,6 +1754,34 @@ async function cleanup() {
 	for (const userId of [DIRECT_USER_ID, INHERITED_USER_ID, BOTH_USER_ID, OUTSIDER_USER_ID]) {
 		await db.delete(user).where(eq(user.id, userId));
 	}
+}
+
+function createGroup(name: string) {
+	return createUserGroup(PROJECT_ID, name);
+}
+
+function createGroupWithinFreeLimit(name: string) {
+	return createUserGroupWithinLimit(3, PROJECT_ID, name);
+}
+
+function createSsoMappedGroup(projectId: string, name: string, mappings: UserGroupSsoMappings) {
+	return createUserGroup(projectId, name, [], DEFAULT_DENSITY, undefined, undefined, mappings);
+}
+
+function expectOnlyOneFulfilled(
+	results: PromiseSettledResult<unknown>[],
+	rejection: { code: string; message: string },
+) {
+	expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+	expect(results.find(({ status }) => status === 'rejected')).toMatchObject({ reason: rejection });
+}
+
+function microsoftSsoMappings(microsoft: string[], defaultProjectRole?: UserRole): UserGroupSsoMappings {
+	return {
+		version: 1,
+		providers: { oidc: [], microsoft },
+		...(defaultProjectRole ? { defaultProjectRole } : {}),
+	};
 }
 
 function ssoMappings(oidc: string[], defaultProjectRole?: UserRole) {

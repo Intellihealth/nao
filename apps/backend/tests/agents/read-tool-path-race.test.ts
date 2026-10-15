@@ -25,7 +25,7 @@ vi.mock('../../src/agents/tools/windows-descriptor-path', () => ({
 }));
 
 import readTool from '../../src/agents/tools/read';
-import type { ToolContext } from '../../src/types/tools';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
 let root: string;
 let projectFolder: string;
@@ -122,13 +122,5 @@ async function arrangeSwappedAncestor(): Promise<string> {
 }
 
 function runRead(filePath: string): Promise<unknown> {
-	const context = {
-		projectFolder,
-		warehouseTableAccess: { enforced: false },
-		docsContextAccess: { enforced: false },
-		filesContextAccess: { enforced: false },
-	} as ToolContext;
-	return readTool.execute!({ file_path: filePath }, { experimental_context: context } as Parameters<
-		NonNullable<typeof readTool.execute>
-	>[1]);
+	return executeTool(readTool, { file_path: filePath }, createToolContext({ projectFolder }));
 }

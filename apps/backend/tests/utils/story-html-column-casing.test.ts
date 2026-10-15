@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../src/utils/logger', () => ({
-	logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-}));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 
 import { renderChartToSvg } from '../../src/components/generate-chart';
 import { generateStoryHtml } from '../../src/utils/story-html';

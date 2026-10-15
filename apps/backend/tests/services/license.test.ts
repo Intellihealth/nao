@@ -1,9 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { exportSPKI, generateKeyPair, SignJWT } from 'jose';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { __reloadEnvForTesting } from '../../src/env';
 import {
@@ -17,23 +16,23 @@ import {
 	stopLicenseHeartbeat,
 } from '../../src/services/license.service';
 import { pingLicensesServer } from '../../src/services/ping';
+import { restoreProcessEnvAfterEach } from '../helpers/process-env-snapshot';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
 
-const DEFAULT_CLAIMS = {
+const DEFAULT_CLAIMS: LicenseClaims = {
 	subscriptionId: 'sub_test_01',
 	companyName: 'Acme Corp',
 	features: [LICENSE_FEATURES.sso],
 };
 
-describe('license.service', () => {
-	let originalEnv: typeof process.env;
+const EIGHT_DAYS_AGO_SECONDS = -8 * 24 * 60 * 60;
 
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-	});
+const createTemporaryFolder = useTemporaryFolders();
+
+describe('license.service', () => {
+	restoreProcessEnvAfterEach({ afterRestore: __reloadEnvForTesting });
 
 	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
 		stopLicenseHeartbeat();
 		resetLicenseCache();
 		vi.unstubAllGlobals();
@@ -51,8 +50,7 @@ describe('license.service', () => {
 	});
 
 	it('verifies a valid signed license', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile(DEFAULT_CLAIMS);
-		setLicenseEnv({ licensePath, publicKeyPem });
+		await installSignedLicense();
 
 		const license = await getLicense();
 		expect(license).not.toBeNull();
@@ -64,7 +62,7 @@ describe('license.service', () => {
 	});
 
 	it('rejects a license signed with a different key', async () => {
-		const { licensePath } = await createSignedLicenseFile(DEFAULT_CLAIMS);
+		const { licensePath } = await createSignedLicenseFile();
 		const { publicKeyPem: unrelatedPublicKey } = await generateKeypairPem();
 
 		setLicenseEnv({ licensePath, publicKeyPem: unrelatedPublicKey });
@@ -74,7 +72,7 @@ describe('license.service', () => {
 	});
 
 	it('rejects a license whose payload was tampered with', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile(DEFAULT_CLAIMS);
+		const { licensePath, publicKeyPem } = await createSignedLicenseFile();
 		const tampered = alterMiddleSegment(licensePath);
 		writeFileSync(licensePath, tampered);
 
@@ -84,27 +82,19 @@ describe('license.service', () => {
 	});
 
 	it('keeps features enabled within the 7-day grace past expiry', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile(DEFAULT_CLAIMS, {
-			expiresInSeconds: -60,
-		});
-		setLicenseEnv({ licensePath, publicKeyPem });
+		await installSignedLicense({}, { expiresInSeconds: -60 });
 
 		expect(await hasFeature(LICENSE_FEATURES.sso)).toBe(true);
 	});
 
 	it('disables features once the 7-day grace has elapsed past expiry', async () => {
-		const eightDaysAgoSeconds = -8 * 24 * 60 * 60;
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile(DEFAULT_CLAIMS, {
-			expiresInSeconds: eightDaysAgoSeconds,
-		});
-		setLicenseEnv({ licensePath, publicKeyPem });
+		await installSignedLicense({}, { expiresInSeconds: EIGHT_DAYS_AGO_SECONDS });
 
 		expect(await hasFeature(LICENSE_FEATURES.sso)).toBe(false);
 	});
 
 	it('only exposes known features from the license payload', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile({
-			...DEFAULT_CLAIMS,
+		await installSignedLicense({
 			features: [
 				LICENSE_FEATURES.sso,
 				LICENSE_FEATURES.excludeColumns,
@@ -112,7 +102,6 @@ describe('license.service', () => {
 				'unknown-future-feature',
 			],
 		});
-		setLicenseEnv({ licensePath, publicKeyPem });
 
 		const license = await getLicense();
 		expect(license?.features).toEqual([
@@ -123,11 +112,7 @@ describe('license.service', () => {
 	});
 
 	it('grants every known feature when the license carries the "*" wildcard', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile({
-			...DEFAULT_CLAIMS,
-			features: [LICENSE_ALL_FEATURES],
-		});
-		setLicenseEnv({ licensePath, publicKeyPem });
+		await installSignedLicense({ features: [LICENSE_ALL_FEATURES] });
 
 		const allFeatures = Object.values(LICENSE_FEATURES);
 		expect((await getLicense())?.features).toEqual(allFeatures);
@@ -137,27 +122,16 @@ describe('license.service', () => {
 	});
 
 	it('expands the "*" wildcard even when listed alongside explicit or unknown features', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile({
-			...DEFAULT_CLAIMS,
+		await installSignedLicense({
 			features: [LICENSE_FEATURES.sso, 'unknown-future-feature', LICENSE_ALL_FEATURES],
 		});
-		setLicenseEnv({ licensePath, publicKeyPem });
 
 		expect((await getLicense())?.features).toEqual(Object.values(LICENSE_FEATURES));
 	});
 
 	it('expands the "*" wildcard from a signed online verdict', async () => {
-		const { licensePath, privateKey, publicKeyPem } = await createSignedLicenseFile({
-			...DEFAULT_CLAIMS,
-			features: [],
-		});
-		setLicenseEnv({ licensePath, publicKeyPem });
-		stubValidateResponse(privateKey, {
-			subscriptionId: DEFAULT_CLAIMS.subscriptionId,
-			valid: true,
-			isActive: true,
-			features: [LICENSE_ALL_FEATURES],
-		});
+		const { privateKey } = await installSignedLicense({ features: [] });
+		stubValidVerdict(privateKey, { features: [LICENSE_ALL_FEATURES] });
 
 		expect(await hasFeature(LICENSE_FEATURES.userBudget)).toBe(false);
 
@@ -168,17 +142,8 @@ describe('license.service', () => {
 	});
 
 	it('updates cached features from signed online validation', async () => {
-		const { licensePath, privateKey, publicKeyPem } = await createSignedLicenseFile({
-			...DEFAULT_CLAIMS,
-			features: [],
-		});
-		setLicenseEnv({ licensePath, publicKeyPem });
-		stubValidateResponse(privateKey, {
-			subscriptionId: DEFAULT_CLAIMS.subscriptionId,
-			valid: true,
-			isActive: true,
-			features: [LICENSE_FEATURES.sso],
-		});
+		const { privateKey } = await installSignedLicense({ features: [] });
+		stubValidVerdict(privateKey, { features: [LICENSE_FEATURES.sso] });
 
 		expect(await hasFeature(LICENSE_FEATURES.sso)).toBe(false);
 
@@ -189,19 +154,9 @@ describe('license.service', () => {
 	});
 
 	it('extends an expired license when the renewal is verified online', async () => {
-		const eightDaysAgoSeconds = -8 * 24 * 60 * 60;
-		const { licensePath, privateKey, publicKeyPem } = await createSignedLicenseFile(DEFAULT_CLAIMS, {
-			expiresInSeconds: eightDaysAgoSeconds,
-		});
+		const { privateKey } = await installSignedLicense({}, { expiresInSeconds: EIGHT_DAYS_AGO_SECONDS });
 		const renewedExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-		setLicenseEnv({ licensePath, publicKeyPem });
-		stubValidateResponse(privateKey, {
-			subscriptionId: DEFAULT_CLAIMS.subscriptionId,
-			valid: true,
-			isActive: true,
-			expiresAt: renewedExpiry.toISOString(),
-			features: [LICENSE_FEATURES.sso],
-		});
+		stubValidVerdict(privateKey, { expiresAt: renewedExpiry.toISOString(), features: [LICENSE_FEATURES.sso] });
 
 		expect(await hasFeature(LICENSE_FEATURES.sso)).toBe(false);
 
@@ -212,13 +167,9 @@ describe('license.service', () => {
 	});
 
 	it('never shortens the license expiry from an online verdict', async () => {
-		const { licensePath, privateKey, publicKeyPem } = await createSignedLicenseFile(DEFAULT_CLAIMS);
-		setLicenseEnv({ licensePath, publicKeyPem });
+		const { privateKey } = await installSignedLicense();
 		const originalExpiry = (await getLicense())?.expiresAt;
-		stubValidateResponse(privateKey, {
-			subscriptionId: DEFAULT_CLAIMS.subscriptionId,
-			valid: true,
-			isActive: true,
+		stubValidVerdict(privateKey, {
 			expiresAt: new Date(Date.now() - 60_000).toISOString(),
 			features: [LICENSE_FEATURES.sso],
 		});
@@ -230,12 +181,8 @@ describe('license.service', () => {
 	});
 
 	it('never checks online for offline licenses', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile({
-			...DEFAULT_CLAIMS,
-			isOffline: true,
-		});
+		await installSignedLicense({ isOffline: true });
 		const fetch = vi.fn();
-		setLicenseEnv({ licensePath, publicKeyPem });
 		vi.stubGlobal('fetch', fetch);
 
 		await startLicenseHeartbeat();
@@ -245,13 +192,9 @@ describe('license.service', () => {
 	});
 
 	it('skips the startup ping for offline licenses', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile({
-			...DEFAULT_CLAIMS,
-			isOffline: true,
-		});
-		const fetch = vi.fn();
 		process.env.MODE = 'prod';
-		setLicenseEnv({ licensePath, publicKeyPem });
+		await installSignedLicense({ isOffline: true });
+		const fetch = vi.fn();
 		vi.stubGlobal('fetch', fetch);
 
 		await pingLicensesServer();
@@ -309,14 +252,7 @@ describe('license.service', () => {
 	});
 
 	it('expires offline licenses strictly at expiresAt', async () => {
-		const { licensePath, publicKeyPem } = await createSignedLicenseFile(
-			{
-				...DEFAULT_CLAIMS,
-				isOffline: true,
-			},
-			{ expiresInSeconds: -60 },
-		);
-		setLicenseEnv({ licensePath, publicKeyPem });
+		await installSignedLicense({ isOffline: true }, { expiresInSeconds: -60 });
 
 		expect(await hasFeature(LICENSE_FEATURES.sso)).toBe(false);
 	});
@@ -325,6 +261,40 @@ describe('license.service', () => {
 interface LicenseEnv {
 	licensePath?: string;
 	publicKeyPem?: string;
+}
+
+interface LicenseClaims {
+	subscriptionId: string;
+	companyName: string;
+	isOffline?: boolean;
+	features: string[];
+}
+
+interface LicenseFileOptions {
+	expiresInSeconds?: number;
+}
+
+interface SignedLicenseFile {
+	licensePath: string;
+	privateKey: CryptoKey;
+	publicKeyPem: string;
+}
+
+interface ValidateClaims {
+	subscriptionId: string;
+	valid: boolean;
+	isActive: boolean;
+	expiresAt?: string;
+	features: string[];
+}
+
+async function installSignedLicense(
+	claims: Partial<LicenseClaims> = {},
+	options: LicenseFileOptions = {},
+): Promise<SignedLicenseFile> {
+	const licenseFile = await createSignedLicenseFile(claims, options);
+	setLicenseEnv(licenseFile);
+	return licenseFile;
 }
 
 function setLicenseEnv({ licensePath, publicKeyPem }: LicenseEnv): void {
@@ -339,17 +309,11 @@ function setLicenseEnv({ licensePath, publicKeyPem }: LicenseEnv): void {
 	__reloadEnvForTesting();
 }
 
-interface LicenseClaims {
-	subscriptionId: string;
-	companyName: string;
-	isOffline?: boolean;
-	features: string[];
-}
-
 async function createSignedLicenseFile(
-	claims: LicenseClaims,
-	options: { expiresInSeconds?: number } = {},
-): Promise<{ licensePath: string; privateKey: CryptoKey; publicKeyPem: string }> {
+	claimOverrides: Partial<LicenseClaims> = {},
+	options: LicenseFileOptions = {},
+): Promise<SignedLicenseFile> {
+	const claims = { ...DEFAULT_CLAIMS, ...claimOverrides };
 	const { privateKey, publicKeyPem } = await generateKeypairPem();
 	const expiresIn = options.expiresInSeconds ?? 3600;
 	const now = Math.floor(Date.now() / 1000);
@@ -366,26 +330,23 @@ async function createSignedLicenseFile(
 		.setExpirationTime(now + expiresIn)
 		.sign(privateKey);
 
-	const dir = mkdtempSync(path.join(tmpdir(), 'nao-license-'));
-	const licensePath = path.join(dir, 'license.key');
+	const licensePath = path.join(createTemporaryFolder('nao-license-'), 'license.key');
 	writeFileSync(licensePath, token);
 
 	return { licensePath, privateKey, publicKeyPem };
 }
 
-interface ValidateClaims {
-	subscriptionId: string;
-	valid: boolean;
-	isActive: boolean;
-	expiresAt?: string;
-	features: string[];
-}
-
-function stubValidateResponse(privateKey: CryptoKey, claims: ValidateClaims): void {
+/** Stubs `fetch` with a positive verdict bound to the default license subscription. */
+function stubValidVerdict(privateKey: CryptoKey, claims: Pick<ValidateClaims, 'expiresAt' | 'features'>): void {
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async () => {
-			const token = await createSignedValidateToken(privateKey, claims);
+			const token = await createSignedValidateToken(privateKey, {
+				subscriptionId: DEFAULT_CLAIMS.subscriptionId,
+				valid: true,
+				isActive: true,
+				...claims,
+			});
 			return new Response(JSON.stringify({ token }));
 		}),
 	);

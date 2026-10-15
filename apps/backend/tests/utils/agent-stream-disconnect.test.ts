@@ -6,9 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { trackAgentStreamDisconnect } from '../../src/utils/agent-stream-disconnect';
 import { logger } from '../../src/utils/logger';
 
-vi.mock('../../src/utils/logger', () => ({
-	logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-}));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 
 describe('trackAgentStreamDisconnect', () => {
 	beforeEach(() => {

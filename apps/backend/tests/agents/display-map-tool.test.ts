@@ -17,10 +17,11 @@ vi.mock('../../src/utils/safe-fetch', () => ({
 
 import { createDisplayMapTool } from '../../src/agents/tools/display-map';
 import * as chatQueries from '../../src/queries/chat.queries';
-import type { QueryResult, ToolContext } from '../../src/types/tools';
+import type { QueryResult } from '../../src/types/tools';
 import * as safeFetchModule from '../../src/utils/safe-fetch';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
-const displayMapTool = createDisplayMapTool();
+type MapOutput = { success: boolean; error?: string; warning?: string };
 
 const input = {
 	query_id: 'q1',
@@ -32,29 +33,21 @@ const input = {
 
 const rows = [{ lat: 48.85, lng: 2.35 }];
 
-function execute(overrides: Partial<typeof input>, queryResults = new Map<string, QueryResult>()) {
-	const context = {
-		queryResults,
-		chatId: 'chat1',
-		generatedArtifacts: { charts: [], maps: [], stories: [] },
-	} as unknown as ToolContext;
-	return displayMapTool.execute!({ ...input, ...overrides }, {
-		experimental_context: context,
-	} as Parameters<NonNullable<typeof displayMapTool.execute>>[1]);
+function execute(overrides: Record<string, unknown>, queryResults = new Map<string, QueryResult>()) {
+	return executeDisplayMap({ ...input, ...overrides }, queryResults);
 }
 
 describe('display_map execute', () => {
 	it('rejects identical latitude and longitude keys', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'lng'], data: rows }]]);
-		const output = await execute({ longitude_key: 'lat' }, queryResults);
+		const output = await execute({ longitude_key: 'lat' }, queryResultsOf(['lat', 'lng'], rows));
 		expect(output).toMatchObject({ success: false });
-		expect((output as { error?: string }).error).toContain('different columns');
+		expect(output.error).toContain('different columns');
 	});
 
 	it('rejects a query id that is neither in the run context nor in the chat history', async () => {
 		const output = await execute({});
 		expect(output).toMatchObject({ success: false });
-		expect((output as { error?: string }).error).toContain('q1');
+		expect(output.error).toContain('q1');
 	});
 
 	it('resolves query results from the persisted chat history', async () => {
@@ -67,44 +60,47 @@ describe('display_map execute', () => {
 	});
 
 	it('succeeds when the keys match the query columns case-insensitively', async () => {
-		const queryResults = new Map([['q1', { columns: ['LAT', 'LNG'], data: [{ LAT: 48.85, LNG: 2.35 }] }]]);
-		const output = await execute({}, queryResults);
+		const output = await execute({}, queryResultsOf(['LAT', 'LNG'], [{ LAT: 48.85, LNG: 2.35 }]));
 		expect(output).toMatchObject({ success: true });
 	});
 
 	it('rejects a key missing from the query columns and lists the available ones', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'city'], data: rows }]]);
-		const output = await execute({}, queryResults);
+		const output = await execute({}, queryResultsOf(['lat', 'city'], rows));
 		expect(output).toMatchObject({ success: false });
-		expect((output as { error?: string }).error).toContain('lng');
-		expect((output as { error?: string }).error).toContain('lat, city');
+		expect(output.error).toContain('lng');
+		expect(output.error).toContain('lat, city');
 	});
 
 	it('rejects case variants that resolve to the same column', async () => {
-		const queryResults = new Map([['q1', { columns: ['LAT'], data: [{ LAT: 48.85 }] }]]);
-		const output = await execute({ latitude_key: 'lat', longitude_key: 'LAT' }, queryResults);
+		const output = await execute(
+			{ latitude_key: 'lat', longitude_key: 'LAT' },
+			queryResultsOf(['LAT'], [{ LAT: 48.85 }]),
+		);
 		expect(output).toMatchObject({ success: false });
 	});
 
 	it('accepts genuinely distinct case-variant columns via exact matches', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'LAT'], data: [{ lat: 48.85, LAT: 2.35 }] }]]);
-		const output = await execute({ latitude_key: 'lat', longitude_key: 'LAT' }, queryResults);
+		const output = await execute(
+			{ latitude_key: 'lat', longitude_key: 'LAT' },
+			queryResultsOf(['lat', 'LAT'], [{ lat: 48.85, LAT: 2.35 }]),
+		);
 		expect(output).toMatchObject({ success: true });
 	});
 
 	it('reports plotted and dropped counts on success', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'lng'], data: [...rows, { lat: null, lng: null }] }]]);
-		const output = await execute({}, queryResults);
+		const output = await execute({}, queryResultsOf(['lat', 'lng'], [...rows, { lat: null, lng: null }]));
 		expect(output).toMatchObject({ success: true, point_count: 1, dropped_row_count: 1 });
 	});
 
 	it('warns about popup keys missing from the query columns without failing', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'lng', 'city'], data: rows }]]);
-		const output = await execute({ label_key: 'cty', tooltip_keys: ['city', 'missing'] }, queryResults);
+		const output = await execute(
+			{ label_key: 'cty', tooltip_keys: ['city', 'missing'] },
+			queryResultsOf(['lat', 'lng', 'city'], rows),
+		);
 		expect(output).toMatchObject({ success: true });
-		expect((output as { warning?: string }).warning).toContain('"cty"');
-		expect((output as { warning?: string }).warning).toContain('"missing"');
-		expect((output as { warning?: string }).warning).not.toContain('"city"');
+		expect(output.warning).toContain('"cty"');
+		expect(output.warning).toContain('"missing"');
+		expect(output.warning).not.toContain('"city"');
 	});
 
 	it('warns when the result exceeds the rendered point cap', async () => {
@@ -112,29 +108,25 @@ describe('display_map execute', () => {
 			lat: 40 + (i % 100) / 100,
 			lng: 2 + (i % 100) / 100,
 		}));
-		const queryResults = new Map([['q1', { columns: ['lat', 'lng'], data: manyRows }]]);
-		const output = await execute({}, queryResults);
+		const output = await execute({}, queryResultsOf(['lat', 'lng'], manyRows));
 		expect(output).toMatchObject({ success: true, point_count: 5001 });
-		expect((output as { warning?: string }).warning).toContain('first 5000 points');
+		expect(output.warning).toContain('first 5000 points');
 	});
 
 	it('omits the warning when popup keys resolve', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'lng', 'CITY'], data: rows }]]);
-		const output = await execute({ label_key: 'city' }, queryResults);
+		const output = await execute({ label_key: 'city' }, queryResultsOf(['lat', 'lng', 'CITY'], rows));
 		expect(output).toMatchObject({ success: true });
-		expect((output as { warning?: string }).warning).toBeUndefined();
+		expect(output.warning).toBeUndefined();
 	});
 
 	it('rejects a query result with no plottable coordinates', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'lng'], data: [{ lat: null, lng: null }] }]]);
-		const output = await execute({}, queryResults);
+		const output = await execute({}, queryResultsOf(['lat', 'lng'], [{ lat: null, lng: null }]));
 		expect(output).toMatchObject({ success: false });
-		expect((output as { error?: string }).error).toContain('no rows with valid');
+		expect(output.error).toContain('no rows with valid');
 	});
 
 	it('rejects an empty query result', async () => {
-		const queryResults = new Map([['q1', { columns: ['lat', 'lng'], data: [] }]]);
-		const output = await execute({}, queryResults);
+		const output = await execute({}, queryResultsOf(['lat', 'lng'], []));
 		expect(output).toMatchObject({ success: false });
 	});
 });
@@ -168,90 +160,76 @@ describe('display_map execute — choropleth with boundaries_url', () => {
 		boundaries_url: 'https://example.com/regions.geojson',
 	};
 
-	function executeChoropleth(overrides = {}, queryResults = new Map<string, QueryResult>()) {
-		const context = {
-			queryResults,
-			chatId: 'chat1',
-			generatedArtifacts: { charts: [], maps: [], stories: [] },
-		} as unknown as ToolContext;
-		const tool = createDisplayMapTool();
-		return tool.execute!({ ...choroplethInput, ...overrides }, {
-			experimental_context: context,
-		} as Parameters<NonNullable<typeof tool.execute>>[1]);
+	function executeChoropleth(overrides: Record<string, unknown> = {}, queryResults = new Map<string, QueryResult>()) {
+		return executeDisplayMap({ ...choroplethInput, ...overrides }, queryResults);
 	}
 
-	it('returns region_count and dropped_row_count when all rows match', async () => {
+	function serveBoundaries(): void {
 		vi.mocked(safeFetchModule.safeFetch).mockResolvedValueOnce('');
 		vi.mocked(safeFetchModule.parseAndValidateGeoJson).mockReturnValueOnce({
 			geojson,
 			propertyKeys: ['iso'],
 			featureCount: 2,
 		});
-		const queryResults = new Map([
+	}
+
+	it('returns region_count and dropped_row_count when all rows match', async () => {
+		serveBoundaries();
+		const queryResults = queryResultsOf(
+			['country', 'value'],
 			[
-				'q1',
-				{
-					columns: ['country', 'value'],
-					data: [
-						{ country: 'FR', value: 10 },
-						{ country: 'DE', value: 20 },
-					],
-				},
+				{ country: 'FR', value: 10 },
+				{ country: 'DE', value: 20 },
 			],
-		]);
+		);
 		const output = await executeChoropleth({}, queryResults);
 		expect(output).toMatchObject({ success: true, region_count: 2, dropped_row_count: 0 });
 	});
 
 	it('reports dropped rows when region_key does not match any feature', async () => {
-		vi.mocked(safeFetchModule.safeFetch).mockResolvedValueOnce('');
-		vi.mocked(safeFetchModule.parseAndValidateGeoJson).mockReturnValueOnce({
-			geojson,
-			propertyKeys: ['iso'],
-			featureCount: 2,
-		});
-		const queryResults = new Map([
+		serveBoundaries();
+		const queryResults = queryResultsOf(
+			['country', 'value'],
 			[
-				'q1',
-				{
-					columns: ['country', 'value'],
-					data: [
-						{ country: 'FR', value: 10 },
-						{ country: 'XX', value: 5 },
-					],
-				},
+				{ country: 'FR', value: 10 },
+				{ country: 'XX', value: 5 },
 			],
-		]);
+		);
 		const output = await executeChoropleth({}, queryResults);
 		expect(output).toMatchObject({ success: true, region_count: 1, dropped_row_count: 1 });
-		expect((output as { warning?: string }).warning).toContain('1 row');
+		expect(output.warning).toContain('1 row');
 	});
 
 	it('fails when no rows match any feature', async () => {
-		vi.mocked(safeFetchModule.safeFetch).mockResolvedValueOnce('');
-		vi.mocked(safeFetchModule.parseAndValidateGeoJson).mockReturnValueOnce({
-			geojson,
-			propertyKeys: ['iso'],
-			featureCount: 2,
-		});
-		const queryResults = new Map([['q1', { columns: ['country', 'value'], data: [{ country: 'XX', value: 5 }] }]]);
-		const output = await executeChoropleth({}, queryResults);
+		serveBoundaries();
+		const output = await executeChoropleth({}, queryResultsOf(['country', 'value'], [{ country: 'XX', value: 5 }]));
 		expect(output).toMatchObject({ success: false });
-		expect((output as { error?: string }).error).toContain('No rows matched');
+		expect(output.error).toContain('No rows matched');
 	});
 
 	it('fails when safeFetch throws', async () => {
 		vi.mocked(safeFetchModule.safeFetch).mockRejectedValueOnce(new Error('Only HTTPS URLs are allowed.'));
-		const queryResults = new Map([['q1', { columns: ['country', 'value'], data: [{ country: 'FR', value: 10 }] }]]);
-		const output = await executeChoropleth({}, queryResults);
+		const output = await executeChoropleth(
+			{},
+			queryResultsOf(['country', 'value'], [{ country: 'FR', value: 10 }]),
+		);
 		expect(output).toMatchObject({ success: false });
-		expect((output as { error?: string }).error).toContain('Only HTTPS');
+		expect(output.error).toContain('Only HTTPS');
 	});
 
 	it('fails when region_key is missing from query columns', async () => {
-		const queryResults = new Map([['q1', { columns: ['country', 'value'], data: [] }]]);
-		const output = await executeChoropleth({ region_key: 'missing_key' }, queryResults);
+		const output = await executeChoropleth({ region_key: 'missing_key' }, queryResultsOf(['country', 'value'], []));
 		expect(output).toMatchObject({ success: false });
-		expect((output as { error?: string }).error).toContain('missing_key');
+		expect(output.error).toContain('missing_key');
 	});
 });
+
+async function executeDisplayMap(mapInput: object, queryResults: Map<string, QueryResult>): Promise<MapOutput> {
+	const tool = createDisplayMapTool();
+	const output = await executeTool(tool, mapInput as never, createToolContext({ queryResults }));
+	return output as MapOutput;
+}
+
+function queryResultsOf(columns: string[], data: Record<string, unknown>[]): Map<string, QueryResult> {
+	return new Map([['q1', { columns, data }]]);
+}

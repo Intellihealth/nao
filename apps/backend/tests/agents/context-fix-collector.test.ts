@@ -1,23 +1,17 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createContextFixCollector } from '../../src/agents/tools/propose-context-fix';
 import { fingerprintFor } from '../../src/services/context-recommendations.reconcile';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
+
+const createTemporaryFolder = useTemporaryFolders();
 
 describe('context fix collector repository boundaries', () => {
-	const temporaryRoots: string[] = [];
-
-	afterEach(() => {
-		for (const root of temporaryRoots.splice(0)) {
-			fs.rmSync(root, { force: true, recursive: true });
-		}
-	});
-
 	it('rejects context edits without a connected context repository', async () => {
-		const projectFolder = createProjectFolder(temporaryRoots);
+		const projectFolder = createProjectFolder();
 		const collector = createContextFixCollector(projectFolder, [], { allowContextEdits: false });
 
 		await expect(
@@ -33,7 +27,7 @@ describe('context fix collector repository boundaries', () => {
 	});
 
 	it('lets an existing empty file receive its first content', async () => {
-		const projectFolder = createProjectFolder(temporaryRoots);
+		const projectFolder = createProjectFolder();
 		fs.mkdirSync(path.join(projectFolder, 'semantics'), { recursive: true });
 		fs.writeFileSync(path.join(projectFolder, 'semantics/orders.md'), '');
 		const collector = createContextFixCollector(projectFolder);
@@ -52,7 +46,7 @@ describe('context fix collector repository boundaries', () => {
 	});
 
 	it('merges a later edit into a file created earlier in the same recommendation', async () => {
-		const projectFolder = createProjectFolder(temporaryRoots);
+		const projectFolder = createProjectFolder();
 		const collector = createContextFixCollector(projectFolder);
 
 		await runEdit(collector, {
@@ -78,7 +72,7 @@ describe('context fix collector repository boundaries', () => {
 	});
 
 	it('rejects whole-file replacement of a file created earlier in the same recommendation', async () => {
-		const projectFolder = createProjectFolder(temporaryRoots);
+		const projectFolder = createProjectFolder();
 		const collector = createContextFixCollector(projectFolder);
 
 		await runEdit(collector, {
@@ -98,7 +92,7 @@ describe('context fix collector repository boundaries', () => {
 	});
 
 	it('allows linked repository edits without a connected context repository', async () => {
-		const projectFolder = createProjectFolder(temporaryRoots);
+		const projectFolder = createProjectFolder();
 		const collector = createContextFixCollector(
 			projectFolder,
 			[
@@ -148,9 +142,8 @@ function runEdit(collector: Collector, input: EditInput) {
 	return collector.editTool.execute!(input, {} as never);
 }
 
-function createProjectFolder(temporaryRoots: string[]): string {
-	const projectFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-context-fix-'));
-	temporaryRoots.push(projectFolder);
+function createProjectFolder(): string {
+	const projectFolder = createTemporaryFolder('nao-context-fix-');
 	fs.writeFileSync(path.join(projectFolder, 'RULES.md'), 'old');
 	fs.mkdirSync(path.join(projectFolder, 'repos/dbt-models/models'), { recursive: true });
 	fs.writeFileSync(path.join(projectFolder, 'repos/dbt-models/models/orders.sql'), 'old');

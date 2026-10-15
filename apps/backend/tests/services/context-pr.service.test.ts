@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 vi.hoisted(() => {
 	process.env.MODE = 'test';
@@ -17,21 +17,26 @@ import {
 import { GENERIC_GIT_PROVIDER } from '../../src/services/generic-git';
 import type { ProposedEdit } from '../../src/types/context-recommendation';
 
-const mocks = vi.hoisted(() => ({
-	cloneRepo: vi.fn(),
-	commitAllAndPushBranch: vi.fn(),
-	createPullRequest: vi.fn(),
-	findContextConfigSubPath: vi.fn().mockResolvedValue(''),
-	getConfig: vi.fn(),
-	getGitInfo: vi.fn(),
-	getGithubToken: vi.fn(),
-	getUser: vi.fn(),
-	getProjectById: vi.fn(),
-	getRecommendationById: vi.fn(),
-	getRepoSubPath: vi.fn().mockReturnValue(''),
-	getUserGitIdentity: vi.fn(),
-	setRecommendationPr: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+	const createProviderMocks = () => ({
+		cloneRepo: vi.fn(),
+		commitAllAndPushBranch: vi.fn(),
+		getGitInfo: vi.fn(),
+		getUserGitIdentity: vi.fn(),
+	});
+	return {
+		getConfig: vi.fn(),
+		getGithubToken: vi.fn(),
+		getGitlabToken: vi.fn(),
+		getProjectById: vi.fn(),
+		getRecommendationById: vi.fn(),
+		getRepoSubPath: vi.fn(),
+		getUser: vi.fn(),
+		setRecommendationPr: vi.fn(),
+		github: { ...createProviderMocks(), createPullRequest: vi.fn(), findContextConfigSubPath: vi.fn() },
+		gitlab: { ...createProviderMocks(), createMergeRequest: vi.fn() },
+	};
+});
 
 vi.mock('../../src/queries/context-recommendation.queries', () => ({
 	getConfig: mocks.getConfig,
@@ -47,7 +52,7 @@ vi.mock('../../src/queries/project.queries', () => ({
 
 vi.mock('../../src/queries/user.queries', () => ({
 	getGithubToken: mocks.getGithubToken,
-	getGitlabToken: vi.fn(),
+	getGitlabToken: mocks.getGitlabToken,
 	getUser: mocks.getUser,
 }));
 
@@ -69,48 +74,56 @@ vi.mock('../../src/services/git-repo', async (importOriginal) => ({
 
 vi.mock('../../src/services/github', () => ({
 	NAO_CO_AUTHOR: { email: 'bot@nao.dev', name: 'nao' },
-	cloneRepo: mocks.cloneRepo,
-	commitAllAndPushBranch: mocks.commitAllAndPushBranch,
-	createPullRequest: mocks.createPullRequest,
-	findContextConfigSubPath: mocks.findContextConfigSubPath,
-	getGitInfo: mocks.getGitInfo,
-	getUserGitIdentity: mocks.getUserGitIdentity,
+	...mocks.github,
 	pushBranch: vi.fn(),
 }));
 
+vi.mock('../../src/services/gitlab', () => ({
+	NAO_CO_AUTHOR: { email: 'bot@nao.dev', name: 'nao' },
+	...mocks.gitlab,
+	gitlabBaseUrl: () => 'https://gitlab.com',
+	pushBranch: vi.fn(),
+}));
+
+const RECOMMENDATION_ID = 'rec-123456789';
+const RECOMMENDATION_BRANCH = /^nao\/context-rec-1234/;
+const USER = { id: 'user-1', name: 'User', email: 'user@example.com' };
+const GIT_IDENTITY = { email: 'user@example.com', name: 'User' };
+const GITHUB_PR_URL = 'https://github.com/nao/context/pull/1';
+const GITLAB_MR_URL = 'https://gitlab.com/nao/context/-/merge_requests/1';
+const CONTEXT_CONFIG = 'project_name: demo\n';
+
+beforeEach(() => {
+	vi.resetAllMocks();
+	mocks.getProjectById.mockResolvedValue({ path: null });
+	mocks.getUser.mockResolvedValue(USER);
+	mocks.getGithubToken.mockResolvedValue('github-token');
+	mocks.github.findContextConfigSubPath.mockResolvedValue('');
+});
+
 describe('createRecommendationPullRequest', () => {
 	beforeEach(() => {
-		vi.resetAllMocks();
-		mocks.getProjectById.mockResolvedValue({ path: null });
 		mocks.getConfig.mockResolvedValue({ repoFullName: 'nao/context' });
-		mocks.getGithubToken.mockResolvedValue('github-token');
-		mocks.getUser.mockResolvedValue({ id: 'user-1', name: 'User', email: 'user@example.com' });
-		mocks.getGitInfo.mockReturnValue({ branch: 'main', isGithub: true, repoFullName: 'nao/context' });
-		mocks.getRepoSubPath.mockReturnValue('');
-		mocks.getUserGitIdentity.mockResolvedValue({ email: 'user@example.com', name: 'User' });
-		mocks.createPullRequest.mockResolvedValue({ html_url: 'https://github.com/nao/context/pull/1' });
-		mocks.findContextConfigSubPath.mockResolvedValue('');
+		mocks.github.getGitInfo.mockReturnValue({ branch: 'main', isGithub: true, repoFullName: 'nao/context' });
+		mocks.github.getUserGitIdentity.mockResolvedValue(GIT_IDENTITY);
+		mocks.github.createPullRequest.mockResolvedValue({ html_url: GITHUB_PR_URL });
 	});
 
 	it('writes proposed edits into the cloned repository', async () => {
 		mocks.getRecommendationById.mockResolvedValue(recommendation());
-		mocks.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
-			fs.writeFileSync(path.join(dir, 'RULES.md'), 'old');
-		});
-		mocks.commitAllAndPushBranch.mockImplementation(({ dir }: { dir: string }) => {
-			expect(fs.readFileSync(path.join(dir, 'RULES.md'), 'utf-8')).toBe('new');
+		cloneRepoWithFiles(mocks.github.cloneRepo, { 'RULES.md': 'old' });
+		expectFilesOnPush(mocks.github.commitAllAndPushBranch, { 'RULES.md': 'new' });
+
+		await expect(createRecommendationPr()).resolves.toEqual({
+			branch: expect.stringMatching(RECOMMENDATION_BRANCH),
+			url: GITHUB_PR_URL,
 		});
 
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).resolves.toEqual({
-			branch: expect.stringMatching(/^nao\/context-rec-1234/),
-			url: 'https://github.com/nao/context/pull/1',
-		});
-
-		expect(mocks.commitAllAndPushBranch).toHaveBeenCalledOnce();
-		expect(mocks.setRecommendationPr).toHaveBeenCalledWith('rec-123456789', {
-			prBranch: expect.stringMatching(/^nao\/context-rec-1234/),
+		expect(mocks.github.commitAllAndPushBranch).toHaveBeenCalledOnce();
+		expect(mocks.setRecommendationPr).toHaveBeenCalledWith(RECOMMENDATION_ID, {
+			prBranch: expect.stringMatching(RECOMMENDATION_BRANCH),
 			prCreatedAt: expect.any(Date),
-			prUrl: 'https://github.com/nao/context/pull/1',
+			prUrl: GITHUB_PR_URL,
 		});
 	});
 
@@ -120,71 +133,48 @@ describe('createRecommendationPullRequest', () => {
 		mocks.getRecommendationById.mockResolvedValue(recommendation());
 
 		await expect(resolveRecommendationRepo('project-1')).resolves.toBeNull();
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).rejects.toThrow(
+		await expect(createRecommendationPr()).rejects.toThrow(
 			'No context repository is connected. Connect one in Settings → Git.',
 		);
 
 		expect(mocks.getProjectById).not.toHaveBeenCalled();
-		expect(mocks.getGitInfo).not.toHaveBeenCalled();
-		expect(mocks.cloneRepo).not.toHaveBeenCalled();
-		expect(mocks.createPullRequest).not.toHaveBeenCalled();
+		expect(mocks.github.getGitInfo).not.toHaveBeenCalled();
+		expect(mocks.github.cloneRepo).not.toHaveBeenCalled();
+		expect(mocks.github.createPullRequest).not.toHaveBeenCalled();
 	});
 
 	it('opens linked repo edits without a connected context repository', async () => {
 		mocks.getConfig.mockResolvedValue(null);
-		mocks.getRecommendationById.mockResolvedValue(
-			recommendation([
-				edit({
-					path: 'repos/dbt-models/models/orders.sql',
-					targetRepo: {
-						repoFullName: 'nao/dbt-models',
-						branch: 'main',
-						path: 'models/orders.sql',
-						provider: 'github',
-					},
-				}),
-			]),
-		);
-		mocks.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
-			fs.mkdirSync(path.join(dir, 'models'), { recursive: true });
-			fs.writeFileSync(path.join(dir, 'models/orders.sql'), 'old');
-		});
-		mocks.commitAllAndPushBranch.mockImplementation(
-			({ dir, repoFullName }: { dir: string; repoFullName: string }) => {
-				expect(repoFullName).toBe('nao/dbt-models');
-				expect(fs.readFileSync(path.join(dir, 'models/orders.sql'), 'utf-8')).toBe('new');
-				expect(fs.existsSync(path.join(dir, 'repos/dbt-models/models/orders.sql'))).toBe(false);
-			},
-		);
-
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).resolves.toEqual({
-			branch: expect.stringMatching(/^nao\/context-rec-1234/),
-			url: 'https://github.com/nao/context/pull/1',
+		mocks.getRecommendationById.mockResolvedValue(recommendation([linkedRepoEdit('github', 'main')]));
+		cloneRepoWithFiles(mocks.github.cloneRepo, { 'models/orders.sql': 'old' });
+		expectFilesOnPush(mocks.github.commitAllAndPushBranch, {
+			'models/orders.sql': 'new',
+			'repos/dbt-models/models/orders.sql': null,
 		});
 
-		expect(mocks.cloneRepo).toHaveBeenCalledWith('github-token', 'nao/dbt-models', expect.any(String), 'main');
+		await expect(createRecommendationPr()).resolves.toEqual({
+			branch: expect.stringMatching(RECOMMENDATION_BRANCH),
+			url: GITHUB_PR_URL,
+		});
+
+		expect(mocks.github.commitAllAndPushBranch).toHaveBeenCalledWith(
+			expect.objectContaining({ repoFullName: 'nao/dbt-models' }),
+		);
+		expect(mocks.github.cloneRepo).toHaveBeenCalledWith(
+			'github-token',
+			'nao/dbt-models',
+			expect.any(String),
+			'main',
+		);
 	});
 
 	it('rejects recommendations that mix context and linked repo edits', async () => {
-		mocks.getRecommendationById.mockResolvedValue(
-			recommendation([
-				edit(),
-				edit({
-					path: 'repos/dbt-models/models/orders.sql',
-					targetRepo: {
-						repoFullName: 'nao/dbt-models',
-						branch: null,
-						path: 'models/orders.sql',
-						provider: 'github',
-					},
-				}),
-			]),
-		);
+		mocks.getRecommendationById.mockResolvedValue(recommendation([edit(), linkedRepoEdit('github', null)]));
 
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).rejects.toThrow(
+		await expect(createRecommendationPr()).rejects.toThrow(
 			'cannot mix context repository edits with linked repository edits',
 		);
-		expect(mocks.cloneRepo).not.toHaveBeenCalled();
+		expect(mocks.github.cloneRepo).not.toHaveBeenCalled();
 	});
 
 	it('rejects proposed edits that would write through repository symlinks', async () => {
@@ -194,17 +184,15 @@ describe('createRecommendationPullRequest', () => {
 
 		try {
 			mocks.getRecommendationById.mockResolvedValue(recommendation());
-			mocks.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
+			mocks.github.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
 				fs.symlinkSync(outsideFile, path.join(dir, 'RULES.md'));
 			});
 
-			await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).rejects.toThrow(
-				'Refusing to write through a symlink',
-			);
+			await expect(createRecommendationPr()).rejects.toThrow('Refusing to write through a symlink');
 
 			expect(fs.readFileSync(outsideFile, 'utf-8')).toBe('outside');
-			expect(mocks.commitAllAndPushBranch).not.toHaveBeenCalled();
-			expect(mocks.createPullRequest).not.toHaveBeenCalled();
+			expect(mocks.github.commitAllAndPushBranch).not.toHaveBeenCalled();
+			expect(mocks.github.createPullRequest).not.toHaveBeenCalled();
 		} finally {
 			fs.rmSync(outsideDir, { force: true, recursive: true });
 		}
@@ -245,128 +233,193 @@ describe('createRecommendationPullRequest', () => {
 	});
 
 	it('auto-detects the monorepo subPath from nao_config.yaml when none is configured', async () => {
-		mocks.getConfig.mockResolvedValue({ repoFullName: 'nao/context' });
 		mocks.getRecommendationById.mockResolvedValue(recommendation());
-		mocks.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
-			fs.mkdirSync(path.join(dir, 'apps', 'nao'), { recursive: true });
-			fs.writeFileSync(path.join(dir, 'apps', 'nao', 'nao_config.yaml'), 'project_name: demo\n');
-			fs.writeFileSync(path.join(dir, 'apps', 'nao', 'RULES.md'), 'old');
+		cloneRepoWithFiles(mocks.github.cloneRepo, {
+			'apps/nao/nao_config.yaml': CONTEXT_CONFIG,
+			'apps/nao/RULES.md': 'old',
 		});
-		mocks.commitAllAndPushBranch.mockImplementation(({ dir }: { dir: string }) => {
-			expect(fs.readFileSync(path.join(dir, 'apps', 'nao', 'RULES.md'), 'utf-8')).toBe('new');
-			expect(fs.existsSync(path.join(dir, 'RULES.md'))).toBe(false);
-		});
+		expectFilesOnPush(mocks.github.commitAllAndPushBranch, { 'apps/nao/RULES.md': 'new', 'RULES.md': null });
 
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).resolves.toMatchObject({
-			url: 'https://github.com/nao/context/pull/1',
-		});
+		await expect(createRecommendationPr()).resolves.toMatchObject({ url: GITHUB_PR_URL });
 
-		expect(mocks.commitAllAndPushBranch).toHaveBeenCalledOnce();
+		expect(mocks.github.commitAllAndPushBranch).toHaveBeenCalledOnce();
 	});
 
 	it('prefers the sub-path from the project git checkout when the clone confirms it', async () => {
 		mocks.getProjectById.mockResolvedValue({ path: '/local/project' });
 		mocks.getRepoSubPath.mockReturnValue('apps/nao');
 		mocks.getRecommendationById.mockResolvedValue(recommendation());
-		mocks.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
-			fs.mkdirSync(path.join(dir, 'apps', 'nao'), { recursive: true });
-			fs.writeFileSync(path.join(dir, 'apps', 'nao', 'nao_config.yaml'), 'project_name: demo\n');
-			fs.writeFileSync(path.join(dir, 'apps', 'nao', 'RULES.md'), 'old');
-			fs.mkdirSync(path.join(dir, 'elsewhere'), { recursive: true });
-			fs.writeFileSync(path.join(dir, 'elsewhere', 'nao_config.yaml'), 'project_name: demo\n');
+		cloneRepoWithFiles(mocks.github.cloneRepo, {
+			'apps/nao/nao_config.yaml': CONTEXT_CONFIG,
+			'apps/nao/RULES.md': 'old',
+			'elsewhere/nao_config.yaml': CONTEXT_CONFIG,
 		});
-		mocks.commitAllAndPushBranch.mockImplementation(({ dir }: { dir: string }) => {
-			expect(fs.readFileSync(path.join(dir, 'apps', 'nao', 'RULES.md'), 'utf-8')).toBe('new');
-			expect(fs.existsSync(path.join(dir, 'elsewhere', 'RULES.md'))).toBe(false);
+		expectFilesOnPush(mocks.github.commitAllAndPushBranch, {
+			'apps/nao/RULES.md': 'new',
+			'elsewhere/RULES.md': null,
 		});
 
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).resolves.toMatchObject({
-			url: 'https://github.com/nao/context/pull/1',
-		});
+		await expect(createRecommendationPr()).resolves.toMatchObject({ url: GITHUB_PR_URL });
 
-		expect(mocks.commitAllAndPushBranch).toHaveBeenCalledOnce();
+		expect(mocks.github.commitAllAndPushBranch).toHaveBeenCalledOnce();
 	});
 
 	it('falls back to clone detection when the local sub-path is absent in the context repo', async () => {
 		mocks.getProjectById.mockResolvedValue({ path: '/local/project' });
 		mocks.getRepoSubPath.mockReturnValue('apps/nao');
 		mocks.getRecommendationById.mockResolvedValue(recommendation());
-		mocks.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
-			fs.mkdirSync(path.join(dir, 'context'), { recursive: true });
-			fs.writeFileSync(path.join(dir, 'context', 'nao_config.yaml'), 'project_name: demo\n');
-			fs.writeFileSync(path.join(dir, 'context', 'RULES.md'), 'old');
+		cloneRepoWithFiles(mocks.github.cloneRepo, {
+			'context/nao_config.yaml': CONTEXT_CONFIG,
+			'context/RULES.md': 'old',
 		});
-		mocks.commitAllAndPushBranch.mockImplementation(({ dir }: { dir: string }) => {
-			expect(fs.readFileSync(path.join(dir, 'context', 'RULES.md'), 'utf-8')).toBe('new');
-			expect(fs.existsSync(path.join(dir, 'apps', 'nao', 'RULES.md'))).toBe(false);
-		});
-
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).resolves.toMatchObject({
-			url: 'https://github.com/nao/context/pull/1',
+		expectFilesOnPush(mocks.github.commitAllAndPushBranch, {
+			'context/RULES.md': 'new',
+			'apps/nao/RULES.md': null,
 		});
 
-		expect(mocks.commitAllAndPushBranch).toHaveBeenCalledOnce();
+		await expect(createRecommendationPr()).resolves.toMatchObject({ url: GITHUB_PR_URL });
+
+		expect(mocks.github.commitAllAndPushBranch).toHaveBeenCalledOnce();
 	});
 
 	it('writes at the repository root when nao_config.yaml sits at the root', async () => {
-		mocks.getConfig.mockResolvedValue({ repoFullName: 'nao/context' });
 		mocks.getRecommendationById.mockResolvedValue(recommendation());
-		mocks.cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
-			fs.writeFileSync(path.join(dir, 'nao_config.yaml'), 'project_name: demo\n');
-			fs.writeFileSync(path.join(dir, 'RULES.md'), 'old');
-		});
-		mocks.commitAllAndPushBranch.mockImplementation(({ dir }: { dir: string }) => {
-			expect(fs.readFileSync(path.join(dir, 'RULES.md'), 'utf-8')).toBe('new');
+		cloneRepoWithFiles(mocks.github.cloneRepo, { 'nao_config.yaml': CONTEXT_CONFIG, 'RULES.md': 'old' });
+		expectFilesOnPush(mocks.github.commitAllAndPushBranch, { 'RULES.md': 'new' });
+
+		await expect(createRecommendationPr()).resolves.toMatchObject({ url: GITHUB_PR_URL });
+
+		expect(mocks.github.commitAllAndPushBranch).toHaveBeenCalledOnce();
+	});
+});
+
+describe('createRecommendationPullRequest (GitLab)', () => {
+	beforeEach(() => {
+		mocks.getConfig.mockResolvedValue({ repoFullName: 'nao/context', repoProvider: 'gitlab' });
+		mocks.getGitlabToken.mockResolvedValue('gitlab-token');
+		mocks.gitlab.getGitInfo.mockReturnValue({ branch: 'main', isGitlab: true, repoFullName: 'nao/context' });
+		mocks.gitlab.getUserGitIdentity.mockResolvedValue(GIT_IDENTITY);
+		mocks.gitlab.createMergeRequest.mockResolvedValue({ iid: 1, web_url: GITLAB_MR_URL });
+	});
+
+	it('writes proposed edits into the cloned repository and opens a merge request', async () => {
+		mocks.getRecommendationById.mockResolvedValue(recommendation());
+		cloneRepoWithFiles(mocks.gitlab.cloneRepo, { 'RULES.md': 'old' });
+		expectFilesOnPush(mocks.gitlab.commitAllAndPushBranch, { 'RULES.md': 'new' });
+
+		await expect(createRecommendationPr()).resolves.toEqual({
+			branch: expect.stringMatching(RECOMMENDATION_BRANCH),
+			url: GITLAB_MR_URL,
 		});
 
-		await expect(createRecommendationPullRequest('project-1', 'rec-123456789', 'user-1')).resolves.toMatchObject({
-			url: 'https://github.com/nao/context/pull/1',
+		expect(mocks.gitlab.commitAllAndPushBranch).toHaveBeenCalledOnce();
+		expect(mocks.setRecommendationPr).toHaveBeenCalledWith(RECOMMENDATION_ID, {
+			prBranch: expect.stringMatching(RECOMMENDATION_BRANCH),
+			prCreatedAt: expect.any(Date),
+			prUrl: GITLAB_MR_URL,
+		});
+	});
+
+	it('opens the merge request against the base branch from the cloned repo', async () => {
+		mocks.getRecommendationById.mockResolvedValue(recommendation());
+		mocks.gitlab.getGitInfo.mockReturnValue({ branch: 'develop', isGitlab: true, repoFullName: 'nao/context' });
+		cloneRepoWithFiles(mocks.gitlab.cloneRepo, { 'RULES.md': 'old' });
+
+		await createRecommendationPr();
+
+		expect(mocks.gitlab.createMergeRequest).toHaveBeenCalledWith(
+			'gitlab-token',
+			'nao/context',
+			expect.objectContaining({ target_branch: 'develop' }),
+		);
+	});
+
+	it('opens linked GitLab repo edits against the upstream repository path', async () => {
+		mocks.getRecommendationById.mockResolvedValue(recommendation([linkedRepoEdit('gitlab', 'main')]));
+		cloneRepoWithFiles(mocks.gitlab.cloneRepo, { 'models/orders.sql': 'old' });
+		expectFilesOnPush(mocks.gitlab.commitAllAndPushBranch, { 'models/orders.sql': 'new' });
+
+		await expect(createRecommendationPr()).resolves.toEqual({
+			branch: expect.stringMatching(RECOMMENDATION_BRANCH),
+			url: GITLAB_MR_URL,
 		});
 
-		expect(mocks.commitAllAndPushBranch).toHaveBeenCalledOnce();
+		expect(mocks.gitlab.commitAllAndPushBranch).toHaveBeenCalledWith(
+			expect.objectContaining({ repoFullName: 'nao/dbt-models' }),
+		);
+		expect(mocks.gitlab.cloneRepo).toHaveBeenCalledWith(
+			'gitlab-token',
+			'nao/dbt-models',
+			expect.any(String),
+			'main',
+		);
+	});
+
+	it('rejects when GitLab token is not connected', async () => {
+		mocks.getRecommendationById.mockResolvedValue(recommendation());
+		mocks.getGitlabToken.mockResolvedValue(null);
+
+		await expect(createRecommendationPr()).rejects.toThrow('GitLab is not connected');
+		expect(mocks.gitlab.cloneRepo).not.toHaveBeenCalled();
 	});
 });
 
 describe('resolveRecommendationRepo', () => {
 	beforeEach(() => {
-		vi.resetAllMocks();
-		mocks.getProjectById.mockResolvedValue({ path: null });
 		mocks.getConfig.mockResolvedValue({ repoFullName: 'sarah/lph' });
-		mocks.getGithubToken.mockResolvedValue('github-token');
-		mocks.findContextConfigSubPath.mockResolvedValue('');
 	});
 
 	it('leaves the sub-path empty when no user is provided to detect it', async () => {
-		mocks.findContextConfigSubPath.mockResolvedValue('apps/example');
+		mocks.github.findContextConfigSubPath.mockResolvedValue('apps/example');
 
 		const repo = await resolveRecommendationRepo('project-1');
 
 		expect(repo).toMatchObject({ repoFullName: 'sarah/lph', source: 'settings', subPath: '' });
-		expect(mocks.findContextConfigSubPath).not.toHaveBeenCalled();
+		expect(mocks.github.findContextConfigSubPath).not.toHaveBeenCalled();
 	});
 
 	it('detects the monorepo sub-path of a configured repo for the copyable prompt', async () => {
-		mocks.findContextConfigSubPath.mockResolvedValue('apps/example');
+		mocks.github.findContextConfigSubPath.mockResolvedValue('apps/example');
 
 		const repo = await resolveRecommendationRepo('project-1', 'user-1');
 
 		expect(repo).toMatchObject({ repoFullName: 'sarah/lph', source: 'settings', subPath: 'apps/example' });
-		expect(mocks.findContextConfigSubPath).toHaveBeenCalledWith('github-token', 'sarah/lph');
-	});
-
-	it('falls back to the repo root when nao_config.yaml cannot be located', async () => {
-		mocks.findContextConfigSubPath.mockResolvedValue('');
-
-		const repo = await resolveRecommendationRepo('project-1', 'user-1');
-
-		expect(repo).toMatchObject({ subPath: '' });
+		expect(mocks.github.findContextConfigSubPath).toHaveBeenCalledWith('github-token', 'sarah/lph');
 	});
 });
+
+function createRecommendationPr() {
+	return createRecommendationPullRequest('project-1', RECOMMENDATION_ID, 'user-1');
+}
+
+function cloneRepoWithFiles(cloneRepo: Mock, files: Record<string, string>): void {
+	cloneRepo.mockImplementation((_token: string, _repoFullName: string, dir: string) => {
+		for (const [relativePath, content] of Object.entries(files)) {
+			const filePath = path.join(dir, relativePath);
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, content);
+		}
+	});
+}
+
+/** Asserts the workdir content at push time; a `null` content means the file must not exist. */
+function expectFilesOnPush(commitAllAndPushBranch: Mock, expectedFiles: Record<string, string | null>): void {
+	commitAllAndPushBranch.mockImplementation(({ dir }: { dir: string }) => {
+		for (const [relativePath, content] of Object.entries(expectedFiles)) {
+			const filePath = path.join(dir, relativePath);
+			if (content === null) {
+				expect(fs.existsSync(filePath)).toBe(false);
+			} else {
+				expect(fs.readFileSync(filePath, 'utf-8')).toBe(content);
+			}
+		}
+	});
+}
 
 function recommendation(edits: ProposedEdit[] = [edit()]): unknown {
 	return {
 		fixKind: 'patch',
-		id: 'rec-123456789',
+		id: RECOMMENDATION_ID,
 		prBranch: null,
 		prUrl: null,
 		projectId: 'project-1',
@@ -385,4 +438,11 @@ function edit(overrides: Partial<ProposedEdit> = {}): ProposedEdit {
 		path: 'RULES.md',
 		...overrides,
 	};
+}
+
+function linkedRepoEdit(provider: 'github' | 'gitlab', branch: string | null): ProposedEdit {
+	return edit({
+		path: 'repos/dbt-models/models/orders.sql',
+		targetRepo: { repoFullName: 'nao/dbt-models', branch, path: 'models/orders.sql', provider },
+	});
 }

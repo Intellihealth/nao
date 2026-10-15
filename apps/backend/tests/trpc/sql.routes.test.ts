@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const mocks = vi.hoisted(() => ({
 	assertProjectCloudBillingAccess: vi.fn(),
 	buildToolContext: vi.fn(),
@@ -30,6 +32,7 @@ import { sqlRoutes } from '../../src/trpc/sql.routes';
 import { router } from '../../src/trpc/trpc';
 
 const testRouter = router({ sql: sqlRoutes });
+const caller = createTestCaller(testRouter, { selectedProjectId: null });
 const existingSqlQuery = {
 	projectId: 'project-id',
 	userId: 'user-id',
@@ -50,17 +53,10 @@ describe('SQL edit routes', () => {
 	});
 
 	it.each(['previewQuery', 'updateQuery'] as const)('resolves the stored query once for %s', async (route) => {
-		await createCaller().sql[route]({ queryId: 'query_1', sql_query: 'select 2' });
+		await caller.sql[route]({ queryId: 'query_1', sql_query: 'select 2' });
 
 		expect(mocks.getLatestExecuteSqlByQueryId).toHaveBeenCalledTimes(1);
 		expect(mocks.getLatestExecuteSqlByQueryId).toHaveBeenCalledWith('query_1');
 		expect(mocks.assertProjectCloudBillingAccess).toHaveBeenCalledWith('project-id');
 	});
 });
-
-function createCaller() {
-	return testRouter.createCaller({
-		session: { user: { id: 'user-id', name: 'Test User', email: 'test@example.com' } },
-		selectedProjectId: null,
-	} as never);
-}

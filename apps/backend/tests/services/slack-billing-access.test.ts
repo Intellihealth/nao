@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SlackConfig } from '../../src/queries/project-slack-config.queries';
 import { ProjectSlackBot } from '../../src/services/slack';
 import type { ConversationContext } from '../../src/types/messaging-provider';
+import { createSlackConfig } from '../helpers/slack-config';
 
 const slackHarness = vi.hoisted(() => ({
 	billingAccess: vi.fn(),
@@ -32,18 +32,7 @@ vi.mock('../../src/services/team-member', () => ({
 	ensureMessagingProviderUser: slackHarness.ensureMessagingProviderUser,
 }));
 
-const config: SlackConfig = {
-	projectId: 'project-1',
-	botToken: 'xoxb-test',
-	signingSecret: 'secret',
-	redirectUrl: 'https://nao.example.com/',
-	autoCreateUsersEnabled: true,
-	autoCreateUsersDomains: ['example.com'],
-	transportMode: 'webhook',
-	appToken: '',
-	replyMode: 'thread',
-	dmScopeMissing: false,
-};
+const config = createSlackConfig({ autoCreateUsersEnabled: true, autoCreateUsersDomains: ['example.com'] });
 
 describe('ProjectSlackBot billing access', () => {
 	beforeEach(() => {
@@ -57,17 +46,7 @@ describe('ProjectSlackBot billing access', () => {
 	});
 
 	it('checks billing before validating and auto-provisioning a message sender', async () => {
-		const bot = new ProjectSlackBot(config);
-		const thread = {
-			id: 'slack:C123:1700000000.000100',
-			post: vi.fn(),
-		} as unknown as ConversationContext['thread'];
-		const userMessage = {
-			text: 'question',
-			author: { userId: 'slack-user' },
-		} as ConversationContext['userMessage'];
-
-		await bot['_handleWorkFlow'](thread, userMessage, { fetchUnseenMessages: false });
+		const thread = await handleQuestion();
 
 		expect(slackHarness.billingAccess).toHaveBeenCalledWith('project-1');
 		expect(slackHarness.usersInfo).not.toHaveBeenCalled();
@@ -77,17 +56,8 @@ describe('ProjectSlackBot billing access', () => {
 
 	it('continues validating and auto-provisioning a message sender when billing is granted', async () => {
 		slackHarness.billingAccess.mockResolvedValue(undefined);
-		const bot = new ProjectSlackBot(config);
-		const thread = {
-			id: 'slack:C123:1700000000.000100',
-			post: vi.fn(),
-		} as unknown as ConversationContext['thread'];
-		const userMessage = {
-			text: 'question',
-			author: { userId: 'slack-user' },
-		} as ConversationContext['userMessage'];
 
-		await bot['_handleWorkFlow'](thread, userMessage, { fetchUnseenMessages: false });
+		await handleQuestion();
 
 		expect(slackHarness.billingAccess).toHaveBeenCalledWith('project-1');
 		expect(slackHarness.usersInfo).toHaveBeenCalledWith({ user: 'slack-user' });
@@ -118,3 +88,17 @@ describe('ProjectSlackBot billing access', () => {
 		expect(postEphemeral).toHaveBeenCalledOnce();
 	});
 });
+
+async function handleQuestion(): Promise<ConversationContext['thread']> {
+	const thread = {
+		id: 'slack:C123:1700000000.000100',
+		post: vi.fn(),
+	} as unknown as ConversationContext['thread'];
+	const userMessage = {
+		text: 'question',
+		author: { userId: 'slack-user' },
+	} as ConversationContext['userMessage'];
+
+	await new ProjectSlackBot(config)['_handleWorkFlow'](thread, userMessage, { fetchUnseenMessages: false });
+	return thread;
+}

@@ -1,13 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const testState = vi.hoisted(() => ({
 	dbConfig: null as Record<string, unknown> | null,
 }));
 
 vi.mock('../../src/db/db', () => ({ db: {} }));
-vi.mock('../../src/utils/logger', () => ({
-	logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-}));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 
 vi.mock('../../src/queries/project.queries', () => ({
 	getProjectById: vi.fn(async () => null),
@@ -20,18 +18,13 @@ vi.mock('../../src/queries/project-llm-config.queries', () => ({
 
 import { __reloadEnvForTesting, env } from '../../src/env';
 import { getEnvProviders, hasEnvApiKey, isProviderDisabled, resolveProviderSettings } from '../../src/utils/llm';
+import { restoreProcessEnvAfterEach } from '../helpers/process-env-snapshot';
 
 describe('DISABLED_PROVIDERS', () => {
-	let originalEnv: typeof process.env;
+	restoreProcessEnvAfterEach({ afterRestore: __reloadEnvForTesting });
 
 	beforeEach(() => {
-		originalEnv = { ...process.env };
 		testState.dbConfig = null;
-	});
-
-	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
 	});
 
 	function setDisabledProviders(value: string | undefined) {
@@ -60,8 +53,6 @@ describe('DISABLED_PROVIDERS', () => {
 	it('rejects unknown provider ids', () => {
 		process.env.DISABLED_PROVIDERS = 'bedrock,not-a-provider';
 		expect(() => __reloadEnvForTesting()).toThrow(/DISABLED_PROVIDERS/);
-		delete process.env.DISABLED_PROVIDERS;
-		__reloadEnvForTesting();
 	});
 
 	it('rejects malformed named-instance ids', () => {
@@ -69,8 +60,6 @@ describe('DISABLED_PROVIDERS', () => {
 		expect(() => __reloadEnvForTesting()).toThrow(/DISABLED_PROVIDERS/);
 		process.env.DISABLED_PROVIDERS = 'anthropic/some-name';
 		expect(() => __reloadEnvForTesting()).toThrow(/DISABLED_PROVIDERS/);
-		delete process.env.DISABLED_PROVIDERS;
-		__reloadEnvForTesting();
 	});
 
 	it('disabling a kind covers its named instances, and an instance can be disabled alone', () => {

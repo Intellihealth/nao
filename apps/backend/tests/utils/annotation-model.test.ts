@@ -15,9 +15,7 @@ vi.mock('../../src/queries/project-llm-config.queries', () => ({
 	getProjectLlmConfigByProvider: mocks.getProjectLlmConfigByProvider,
 }));
 
-vi.mock('../../src/utils/logger', () => ({
-	logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-}));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 
 describe('resolveAnnotationModelId', () => {
 	beforeEach(() => {

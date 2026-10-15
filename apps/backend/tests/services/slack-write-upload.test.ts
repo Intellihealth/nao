@@ -23,6 +23,7 @@ import { ProjectSlackBot } from '../../src/services/slack';
 import type { UIMessagePart } from '../../src/types/chat';
 import type { ConversationContext, StreamState } from '../../src/types/messaging-provider';
 import { logger } from '../../src/utils/logger';
+import { createSlackConfig } from '../helpers/slack-config';
 
 const PROJECT_ID = 'project-1';
 const USER_ID = 'user-1';
@@ -30,18 +31,7 @@ const USER_ID = 'user-1';
 type WritePart = Extract<UIMessagePart, { type: 'tool-write' }>;
 
 function createBot(): ProjectSlackBot {
-	return new ProjectSlackBot({
-		projectId: PROJECT_ID,
-		botToken: 'xoxb-test',
-		signingSecret: 'secret',
-		redirectUrl: 'https://nao.example.com/',
-		autoCreateUsersEnabled: false,
-		autoCreateUsersDomains: [],
-		transportMode: 'webhook',
-		appToken: '',
-		replyMode: 'thread',
-		dmScopeMissing: false,
-	});
+	return new ProjectSlackBot(createSlackConfig({ projectId: PROJECT_ID }));
 }
 
 function createState(): StreamState {

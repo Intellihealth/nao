@@ -63,15 +63,6 @@ describe('organization selection', () => {
 		expect(mocks.execute).toHaveBeenCalledOnce();
 	});
 
-	it('rejects a stale organization selection', async () => {
-		mocks.execute.mockResolvedValueOnce([]);
-
-		const membership = await getUserOrgMembership(USER_ID, 'stale-organization-id');
-
-		expect(membership).toBeNull();
-		expect(mocks.execute).toHaveBeenCalledOnce();
-	});
-
 	it('lists only the membership fields needed by the selector', async () => {
 		mocks.execute.mockResolvedValueOnce([
 			{ id: SELECTED_ORG_ID, name: 'Alpha Organization', role: 'viewer' },

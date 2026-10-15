@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+	mockLockingSelectQuery,
+	mockMutationQuery,
+	mockSelectQuery,
+	recordEvent,
+} from '../helpers/postgres-query-builder-mocks';
+
 const mocks = vi.hoisted(() => ({
+	createTransaction: (() => ({})) as () => unknown,
 	events: [] as string[],
 	initialContextGrants: null as unknown,
 	initialRowPolicies: { version: 1 as const, policies: [] as unknown[] },
@@ -10,29 +18,44 @@ const mocks = vi.hoisted(() => ({
 	updatedRowPolicies: undefined as unknown,
 }));
 
-vi.mock('../../src/db/dbConfig', () => ({
-	Dialect: { Postgres: 'postgres', Sqlite: 'sqlite' },
-	default: { dialect: 'postgres' },
-}));
+vi.mock(
+	'../../src/db/dbConfig',
+	async () => (await import('../helpers/postgres-query-builder-mocks')).postgresDbConfigMock,
+);
 
 vi.mock('../../src/queries/project.queries', () => ({
 	listUsersWithProjectAccess: vi.fn(),
 	listUsersWithProjectAccessDetails: vi.fn(),
 }));
 
-vi.mock('../../src/db/db', () => ({
-	db: {
-		select: () =>
-			query([storedGroup(ssoMappings(['finance']), mocks.initialRowPolicies, mocks.initialContextGrants)]),
-		transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation(transaction()),
-	},
-}));
+vi.mock('../../src/db/db', async () => {
+	const { mockSelectQuery: mockQuery } = await import('../helpers/postgres-query-builder-mocks');
+	return {
+		db: {
+			select: () =>
+				mockQuery([
+					storedGroup(ssoMappings(['finance']), mocks.initialRowPolicies, mocks.initialContextGrants),
+				]),
+			transaction: async (operation: (transaction: unknown) => Promise<unknown>) =>
+				operation(mocks.createTransaction()),
+		},
+	};
+});
 
-import { createUserGroup, createUserGroupWithinLimit, updateUserGroup } from '../../src/queries/user-group.queries';
+import {
+	createUserGroup,
+	createUserGroupWithinLimit,
+	updateProjectRowSecurity,
+	updateUserGroup,
+} from '../../src/queries/user-group.queries';
+
+beforeEach(() => {
+	mocks.events.length = 0;
+});
 
 describe('PostgreSQL user group updates', () => {
 	beforeEach(() => {
-		mocks.events.length = 0;
+		mocks.createTransaction = userGroupTransaction;
 		mocks.initialContextGrants = null;
 		mocks.initialRowPolicies = { version: 1, policies: [] };
 		mocks.lockedRowPolicies = { version: 1, policies: [] };
@@ -109,7 +132,20 @@ describe('PostgreSQL user group updates', () => {
 	});
 });
 
-function transaction() {
+describe('PostgreSQL project row security updates', () => {
+	beforeEach(() => {
+		mocks.createTransaction = projectRowSecurityTransaction;
+	});
+
+	it('locks the project before reading or changing user groups', async () => {
+		await updateProjectRowSecurity('project-1', { version: 1, tables: [] });
+
+		expect(mocks.events).toEqual(['lock-project:update', 'lock-project', 'select-groups', 'update-project']);
+	});
+});
+
+function userGroupTransaction() {
+	const lockProject = recordEvent(mocks.events, 'lock-project');
 	return {
 		select: (selection?: Record<string, unknown>) => {
 			if (selection === undefined) {
@@ -117,8 +153,9 @@ function transaction() {
 			}
 			if ('rowSecurity' in selection) {
 				mocks.selectedProjectRowSecurity = true;
-				return lockingQuery([{ id: 'project-1', rowSecurity: mocks.projectRowSecurity }], () =>
-					mocks.events.push('lock-project'),
+				return mockLockingSelectQuery(
+					[{ id: 'project-1', rowSecurity: mocks.projectRowSecurity }],
+					lockProject,
 				);
 			}
 			if ('name' in selection) {
@@ -127,61 +164,36 @@ function transaction() {
 			if ('count' in selection) {
 				return eventQuery([{ count: 0 }], 'count-groups');
 			}
-			return lockingQuery([{ id: 'project-1' }], () => mocks.events.push('lock-project'));
+			return mockLockingSelectQuery([{ id: 'project-1' }], lockProject);
 		},
-		insert: () => mutation([storedGroup()], () => mocks.events.push('insert')),
-		update: () => mutation([storedGroup(ssoMappings([]))], () => mocks.events.push('update-mapping')),
-		delete: () => mutation(undefined, () => mocks.events.push('delete-memberships')),
+		insert: () =>
+			mockMutationQuery({ result: [storedGroup()], beforeExecute: recordEvent(mocks.events, 'insert') }),
+		update: () =>
+			mockMutationQuery({
+				result: [storedGroup(ssoMappings([]))],
+				beforeExecute: recordEvent(mocks.events, 'update-mapping'),
+				onSet: (values) => {
+					mocks.updatedRowPolicies = values.rowPolicies;
+				},
+			}),
+		delete: () => mockMutationQuery({ beforeExecute: recordEvent(mocks.events, 'delete-memberships') }),
 	};
 }
 
-function query(rows: unknown[]) {
-	const builder = {
-		from: () => builder,
-		where: () => builder,
-		limit: () => builder,
-		for: (_strength: string) => builder,
-		execute: vi.fn(async () => rows),
+function projectRowSecurityTransaction() {
+	return {
+		select: (selection: Record<string, unknown>) =>
+			'rowSecurity' in selection
+				? mockLockingSelectQuery([{ id: 'project-1', rowSecurity: { version: 1, tables: [] } }], (strength) => {
+						mocks.events.push(`lock-project:${strength}`, 'lock-project');
+					})
+				: eventQuery([], 'select-groups'),
+		update: () => mockMutationQuery({ beforeExecute: recordEvent(mocks.events, 'update-project') }),
 	};
-	return builder;
-}
-
-function lockingQuery(rows: unknown[], beforeExecute: () => void) {
-	const builder = query(rows);
-	builder.for = () => {
-		builder.execute = vi.fn(async () => {
-			beforeExecute();
-			return rows;
-		});
-		return builder;
-	};
-	return builder;
 }
 
 function eventQuery(rows: unknown[], event: string) {
-	const builder = query(rows);
-	builder.execute = vi.fn(async () => {
-		mocks.events.push(event);
-		return rows;
-	});
-	return builder;
-}
-
-function mutation(rows: unknown, beforeExecute: () => void) {
-	const builder = {
-		values: () => builder,
-		set: (values: Record<string, unknown>) => {
-			mocks.updatedRowPolicies = values.rowPolicies;
-			return builder;
-		},
-		where: () => builder,
-		returning: () => builder,
-		execute: vi.fn(async () => {
-			beforeExecute();
-			return rows;
-		}),
-	};
-	return builder;
+	return mockSelectQuery(rows, recordEvent(mocks.events, event));
 }
 
 function storedGroup(

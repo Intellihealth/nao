@@ -1,5 +1,4 @@
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,13 +11,14 @@ vi.mock('../../src/services/storage/user-files', () => ({
 
 import { createVirtualFS } from '../../src/agents/tools/execute-python';
 import { refreshProjectContextInSandbox } from '../../src/agents/tools/execute-sandboxed-code';
-import type { ToolContext } from '../../src/types/tools';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
+import { createToolContext } from '../helpers/tool-context';
 
 let projectFolder: string;
-const temporaryFolders: string[] = [];
+const createTemporaryFolder = useTemporaryFolders();
 
 beforeEach(() => {
-	projectFolder = createTemporaryFolder();
+	projectFolder = createTemporaryFolder('nao-docs-execution-');
 	fs.mkdirSync(path.join(projectFolder, 'docs', 'finance'), { recursive: true });
 	fs.mkdirSync(path.join(projectFolder, 'docs', 'legal'), { recursive: true });
 	fs.writeFileSync(path.join(projectFolder, 'docs', 'finance', 'kpis.md'), 'kpis');
@@ -28,9 +28,6 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	for (const folder of temporaryFolders.splice(0)) {
-		fs.rmSync(folder, { recursive: true, force: true });
-	}
 });
 
 describe('docs execution context filtering', () => {
@@ -42,7 +39,7 @@ describe('docs execution context filtering', () => {
 	it('keeps scanning siblings after a directory stops resolving safely', () => {
 		const scanDirectory = path.join(projectFolder, 'scan');
 		const swappedDirectory = path.join(scanDirectory, 'a-broken');
-		const outsideDirectory = createTemporaryFolder();
+		const outsideDirectory = createTemporaryFolder('nao-docs-execution-');
 		fs.mkdirSync(swappedDirectory, { recursive: true });
 		fs.writeFileSync(path.join(outsideDirectory, 'secret.md'), 'secret');
 		fs.writeFileSync(path.join(scanDirectory, 'z-visible.md'), 'visible');
@@ -91,11 +88,11 @@ describe('docs execution context filtering', () => {
 		const sandbox = new FakeContextSandbox();
 		const folderAccess = contextWithDocs([{ kind: 'folder', path: 'finance' }]);
 
-		await refreshProjectContextInSandbox(sandbox, folderAccess, createTemporaryFolder());
+		await refreshProjectContextInSandbox(sandbox, folderAccess, createTemporaryFolder('nao-docs-execution-'));
 		expect(sandbox.paths()).toEqual(['/root/context/RULES.md', '/root/context/docs/finance/kpis.md']);
 
 		fs.writeFileSync(path.join(projectFolder, 'docs', 'finance', 'future.md'), 'future');
-		await refreshProjectContextInSandbox(sandbox, folderAccess, createTemporaryFolder());
+		await refreshProjectContextInSandbox(sandbox, folderAccess, createTemporaryFolder('nao-docs-execution-'));
 		expect(sandbox.paths()).toEqual([
 			'/root/context/RULES.md',
 			'/root/context/docs/finance/future.md',
@@ -105,14 +102,14 @@ describe('docs execution context filtering', () => {
 		await refreshProjectContextInSandbox(
 			sandbox,
 			contextWithDocs([{ kind: 'file', path: 'legal/terms.md' }]),
-			createTemporaryFolder(),
+			createTemporaryFolder('nao-docs-execution-'),
 		);
 		expect(sandbox.paths()).toEqual(['/root/context/RULES.md', '/root/context/docs/legal/terms.md']);
 	});
 
 	it('refreshes sandbox rules for group changes and omits malformed rules', async () => {
 		const sandbox = new FakeContextSandbox();
-		const tmpDir = createTemporaryFolder();
+		const tmpDir = createTemporaryFolder('nao-docs-execution-');
 		fs.writeFileSync(
 			path.join(projectFolder, 'RULES.md'),
 			'Public\n{% if group("finance") %}\nFinance\n{% endif %}\n',
@@ -130,23 +127,12 @@ describe('docs execution context filtering', () => {
 	});
 });
 
-function contextWithDocs(
-	grants: Array<{ kind: 'folder' | 'file'; path: string }>,
-	groupNames: string[] | null = null,
-): ToolContext {
-	return {
+function contextWithDocs(grants: Array<{ kind: 'folder' | 'file'; path: string }>, groupNames: string[] | null = null) {
+	return createToolContext({
 		projectFolder,
-		warehouseTableAccess: { enforced: false },
 		docsContextAccess: { enforced: true, access: { mode: 'restricted', grants } },
-		filesContextAccess: { enforced: false },
 		userRulesGroupAccess: groupNames === null ? { enforced: false } : { enforced: true, groupNames },
-	} as ToolContext;
-}
-
-function createTemporaryFolder(): string {
-	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-docs-execution-'));
-	temporaryFolders.push(folder);
-	return folder;
+	});
 }
 
 class FakeContextSandbox {

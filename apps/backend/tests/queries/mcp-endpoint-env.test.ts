@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const testState = vi.hoisted(() => ({
 	storedSettings: null as Record<string, unknown> | null,
@@ -20,18 +20,13 @@ vi.mock('../../src/db/db', () => ({
 
 import { __reloadEnvForTesting } from '../../src/env';
 import { getMcpEndpointSettings } from '../../src/queries/mcp-endpoint.queries';
+import { restoreProcessEnvAfterEach } from '../helpers/process-env-snapshot';
 
 describe('MCP_ENDPOINT_ENABLED default', () => {
-	let originalEnv: typeof process.env;
+	restoreProcessEnvAfterEach({ afterRestore: __reloadEnvForTesting });
 
 	beforeEach(() => {
-		originalEnv = { ...process.env };
 		testState.storedSettings = null;
-	});
-
-	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
 	});
 
 	function setEnvToggle(value: string | undefined) {

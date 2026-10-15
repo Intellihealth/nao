@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
 	addDefaultOrganization: vi.fn(),
@@ -43,16 +43,11 @@ beforeEach(() => {
 
 describe('syncSsoLoginGroups', () => {
 	it('restores the organization before OIDC User Group and role sync', async () => {
-		const calls: string[] = [];
 		mocks.isOidc.mockReturnValue(true);
-		mocks.addDefaultOrganization.mockImplementation(async () => {
-			calls.push('organization');
-		});
-		mocks.syncUserGroups.mockImplementation(async () => {
-			calls.push('groups');
-		});
-		mocks.syncRoles.mockImplementation(async () => {
-			calls.push('roles');
+		const calls = recordCallOrder({
+			organization: mocks.addDefaultOrganization,
+			groups: mocks.syncUserGroups,
+			roles: mocks.syncRoles,
 		});
 		await syncSsoLoginGroups('user-1', 'okta');
 		expect(mocks.syncRoles).toHaveBeenCalledWith('user-1');
@@ -62,12 +57,9 @@ describe('syncSsoLoginGroups', () => {
 	});
 
 	it('restores the organization before Microsoft User Group sync', async () => {
-		const calls: string[] = [];
-		mocks.addDefaultOrganization.mockImplementation(async () => {
-			calls.push('organization');
-		});
-		mocks.syncMicrosoftUserGroups.mockImplementation(async () => {
-			calls.push('groups');
+		const calls = recordCallOrder({
+			organization: mocks.addDefaultOrganization,
+			groups: mocks.syncMicrosoftUserGroups,
 		});
 		await syncSsoLoginGroups('user-1', 'microsoft');
 		expect(mocks.syncMicrosoftUserGroups).toHaveBeenCalledWith('user-1');
@@ -95,22 +87,26 @@ describe('syncSsoLoginGroups', () => {
 	});
 
 	it('keeps login successful and preserves ordering when synchronization rejects', async () => {
-		const calls: string[] = [];
 		mocks.isOidc.mockReturnValue(true);
-		mocks.addDefaultOrganization.mockImplementation(async () => {
-			calls.push('organization');
-			throw new Error('organization failure');
-		});
-		mocks.syncUserGroups.mockImplementation(async () => {
-			calls.push('groups');
-			throw new Error('group failure');
-		});
-		mocks.syncRoles.mockImplementation(async () => {
-			calls.push('roles');
-			throw new Error('role failure');
-		});
+		const calls = recordCallOrder(
+			{ organization: mocks.addDefaultOrganization, groups: mocks.syncUserGroups, roles: mocks.syncRoles },
+			{ reject: true },
+		);
 		await expect(syncSsoLoginGroups('user-1', 'okta')).resolves.toBeUndefined();
 		expect(mocks.syncRoles).toHaveBeenCalledWith('user-1');
 		expect(calls).toEqual(['organization', 'groups', 'roles']);
 	});
 });
+
+function recordCallOrder(steps: Record<string, Mock>, { reject = false } = {}): string[] {
+	const calls: string[] = [];
+	for (const [label, step] of Object.entries(steps)) {
+		step.mockImplementation(async () => {
+			calls.push(label);
+			if (reject) {
+				throw new Error(`${label} failure`);
+			}
+		});
+	}
+	return calls;
+}

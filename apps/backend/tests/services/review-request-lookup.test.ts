@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { findPullRequestByBranch } from '../../src/services/github';
 import { findMergeRequestByBranch, findOpenMergeRequest } from '../../src/services/gitlab';
 
+const GITLAB_PROJECT_ID = 101;
+
 afterEach(() => {
 	vi.unstubAllGlobals();
 });
@@ -30,19 +32,10 @@ describe('review request branch lookup', () => {
 	});
 
 	it('ignores an open GitLab merge request from a fork with the same branch name', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (input: string | URL | Request) => {
-				const url = new URL(input.toString());
-				if (!url.pathname.endsWith('/merge_requests')) {
-					return jsonResponse({ id: 101 });
-				}
-				return jsonResponse([
-					gitLabMergeRequest('https://gitlab.com/fork/context/-/merge_requests/4', 202, 'opened'),
-					gitLabMergeRequest('https://gitlab.com/nao/context/-/merge_requests/5', 101, 'opened'),
-				]);
-			}),
-		);
+		stubGitLabFetch(() => [
+			gitLabMergeRequest('https://gitlab.com/fork/context/-/merge_requests/4', 202, 'opened'),
+			gitLabMergeRequest('https://gitlab.com/nao/context/-/merge_requests/5', GITLAB_PROJECT_ID, 'opened'),
+		]);
 
 		await expect(findOpenMergeRequest('token', 'nao/context', 'nao/fix')).resolves.toEqual({
 			url: 'https://gitlab.com/nao/context/-/merge_requests/5',
@@ -50,19 +43,16 @@ describe('review request branch lookup', () => {
 	});
 
 	it('prefers an open GitLab merge request over a more recently updated closed one', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (input: string | URL | Request) => {
-				const url = new URL(input.toString());
-				if (!url.pathname.endsWith('/merge_requests')) {
-					return jsonResponse({ id: 101 });
-				}
-				return jsonResponse(
-					url.searchParams.get('state') === 'opened'
-						? [gitLabMergeRequest('https://gitlab.com/nao/context/-/merge_requests/2', 101, 'opened')]
-						: [gitLabMergeRequest('https://gitlab.com/nao/context/-/merge_requests/1', 101, 'closed')],
-				);
-			}),
+		stubGitLabFetch((url) =>
+			url.searchParams.get('state') === 'opened'
+				? [gitLabMergeRequest('https://gitlab.com/nao/context/-/merge_requests/2', GITLAB_PROJECT_ID, 'opened')]
+				: [
+						gitLabMergeRequest(
+							'https://gitlab.com/nao/context/-/merge_requests/1',
+							GITLAB_PROJECT_ID,
+							'closed',
+						),
+					],
 		);
 
 		await expect(findMergeRequestByBranch('token', 'nao/context', 'nao/fix')).resolves.toEqual({
@@ -73,6 +63,20 @@ describe('review request branch lookup', () => {
 		});
 	});
 });
+
+/** Answers the project lookup with `GITLAB_PROJECT_ID` and every merge request listing with `listMergeRequests`. */
+function stubGitLabFetch(listMergeRequests: (url: URL) => unknown[]): void {
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(input.toString());
+			if (!url.pathname.endsWith('/merge_requests')) {
+				return jsonResponse({ id: GITLAB_PROJECT_ID });
+			}
+			return jsonResponse(listMergeRequests(url));
+		}),
+	);
+}
 
 function githubPullRequest(url: string, state: 'open' | 'closed') {
 	return {

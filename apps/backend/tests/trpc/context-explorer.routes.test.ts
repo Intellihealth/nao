@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const mocks = vi.hoisted(() => ({
 	ContextProjectResolutionError: class ContextProjectResolutionError extends Error {},
 	completeActivity: vi.fn(),
@@ -113,16 +115,21 @@ import { contextExplorerRoutes } from '../../src/trpc/context-explorer.routes';
 import { router } from '../../src/trpc/trpc';
 
 const testRouter = router(contextExplorerRoutes);
+const caller = createTestCaller(testRouter);
+const OLD_COMMIT = 'a'.repeat(40);
+const NEW_COMMIT = 'b'.repeat(40);
+const CONTEXT_FILE_CHANGE = { path: '/context.md', additions: 1, deletions: 0 };
+
+beforeEach(() => {
+	vi.resetAllMocks();
+	mocks.getUserRoleInProject.mockResolvedValue('admin');
+	mocks.getGithubToken.mockResolvedValue('github-token');
+	mocks.resolveContextRepository.mockResolvedValue({ provider: 'github' });
+});
 
 describe('context explorer repository connection', () => {
 	beforeEach(() => {
-		vi.resetAllMocks();
-		mocks.getUserRoleInProject.mockResolvedValue('admin');
-		mocks.getGithubToken.mockResolvedValue('github-token');
 		mocks.getGitlabToken.mockResolvedValue('gitlab-token');
-		mocks.resolveContextRepository.mockResolvedValue({
-			provider: 'github',
-		});
 		mocks.connectContextRepository.mockResolvedValue({
 			provider: 'gitlab',
 			repoFullName: 'nao/context',
@@ -133,7 +140,7 @@ describe('context explorer repository connection', () => {
 	});
 
 	it('connects a GitHub repository with the GitHub token', async () => {
-		await createCaller().connectRepository({ provider: 'github', repoFullName: 'nao/context' });
+		await caller.connectRepository({ provider: 'github', repoFullName: 'nao/context' });
 
 		expect(mocks.getGithubToken).toHaveBeenCalledWith('user-id');
 		expect(mocks.getGitlabToken).not.toHaveBeenCalled();
@@ -148,7 +155,7 @@ describe('context explorer repository connection', () => {
 
 	it('connects a GitLab repository with the GitLab token', async () => {
 		await expect(
-			createCaller().connectRepository({ provider: 'gitlab', repoFullName: 'nao/context' }),
+			caller.connectRepository({ provider: 'gitlab', repoFullName: 'nao/context' }),
 		).resolves.toMatchObject({
 			provider: 'gitlab',
 			repoFullName: 'nao/context',
@@ -169,7 +176,7 @@ describe('context explorer repository connection', () => {
 		mocks.getGitlabToken.mockResolvedValue(null);
 
 		await expect(
-			createCaller().connectRepository({ provider: 'gitlab', repoFullName: 'nao/context' }),
+			caller.connectRepository({ provider: 'gitlab', repoFullName: 'nao/context' }),
 		).rejects.toMatchObject({
 			code: 'FORBIDDEN',
 			message: 'Connect your GitLab account first.',
@@ -179,13 +186,6 @@ describe('context explorer repository connection', () => {
 });
 
 describe('context explorer file access', () => {
-	beforeEach(() => {
-		vi.resetAllMocks();
-		mocks.getUserRoleInProject.mockResolvedValue('admin');
-		mocks.getGithubToken.mockResolvedValue('github-token');
-		mocks.resolveContextRepository.mockResolvedValue({ provider: 'github' });
-	});
-
 	it('returns the source file tree without resolving Git', async () => {
 		const entries = [
 			{ name: 'folder', path: '/folder', type: 'directory', children: [] },
@@ -195,7 +195,7 @@ describe('context explorer file access', () => {
 		mocks.resolveContextExplorerGit.mockRejectedValue(new Error('clone failed'));
 		mocks.resolveContextExplorerGitSafely.mockRejectedValue(new Error('clone failed'));
 
-		await expect(createCaller().getFileTree()).resolves.toEqual({ entries });
+		await expect(caller.getFileTree()).resolves.toEqual({ entries });
 
 		expect(mocks.getFileTree).toHaveBeenCalledWith('/tmp/nao-project');
 		expect(mocks.resolveContextExplorerGit).not.toHaveBeenCalled();
@@ -224,14 +224,14 @@ describe('context explorer file access', () => {
 		});
 		mocks.writeFileContent.mockResolvedValue({ hash: 'updated-hash' });
 
-		await createCaller().readFile({ path: '/context.md' });
+		await caller.readFile({ path: '/context.md' });
 		expect(mocks.resolveContextExplorerGitSafely).toHaveBeenCalledOnce();
 		expect(mocks.readFileContent).toHaveBeenCalledWith(
 			'/context.md',
 			expect.objectContaining({ git: unavailableGit }),
 		);
 
-		await createCaller().writeFile({
+		await caller.writeFile({
 			path: '/context.md',
 			content: 'updated\n',
 			expectedHash: '0'.repeat(64),
@@ -246,7 +246,7 @@ describe('context explorer file access', () => {
 	});
 
 	it('passes validated historical commit ranges to the file diff service', async () => {
-		const from = 'a'.repeat(40);
+		const from = OLD_COMMIT;
 		const to = 'B'.repeat(64);
 		mocks.resolveContextExplorerGit.mockResolvedValue({ status: 'available', repo: {}, context: {} });
 		mocks.getContextFileDiff.mockResolvedValue({
@@ -258,7 +258,7 @@ describe('context explorer file access', () => {
 			newContent: 'new\n',
 		});
 
-		await createCaller().getFileDiff({ path: '/context.md', from, to });
+		await caller.getFileDiff({ path: '/context.md', from, to });
 
 		expect(mocks.getContextFileDiff).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: 'project-id', projectFolder: '/tmp/nao-project' }),
@@ -268,11 +268,11 @@ describe('context explorer file access', () => {
 	});
 
 	it('checks only the selected historical range action', async () => {
-		const from = 'a'.repeat(40);
-		const to = 'b'.repeat(40);
+		const from = OLD_COMMIT;
+		const to = NEW_COMMIT;
 		mocks.getHistoricalContextDiffActions.mockResolvedValue(['switch']);
 
-		await expect(createCaller().getHistoricalDiffAction({ from, to })).resolves.toBe('switch');
+		await expect(caller.getHistoricalDiffAction({ from, to })).resolves.toBe('switch');
 
 		expect(mocks.getHistoricalContextDiffActions).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: 'project-id', projectFolder: '/tmp/nao-project' }),
@@ -282,11 +282,11 @@ describe('context explorer file access', () => {
 	});
 
 	it('updates the current user worktree with required historical commits', async () => {
-		const from = 'a'.repeat(40);
-		const to = 'b'.repeat(40);
+		const from = OLD_COMMIT;
+		const to = NEW_COMMIT;
 		mocks.updateContextWorktree.mockResolvedValue({ branch: 'main', commit: to });
 
-		await createCaller().updateWorktree({ requiredCommits: [from, to] });
+		await caller.updateWorktree({ requiredCommits: [from, to] });
 
 		expect(mocks.updateContextWorktree).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: 'project-id', projectFolder: '/tmp/nao-project' }),
@@ -295,43 +295,29 @@ describe('context explorer file access', () => {
 	});
 
 	it.each([
-		{ path: '/context.md', from: 'abc1234', to: 'b'.repeat(40) },
-		{ path: '/context.md', from: 'a'.repeat(40) },
-		{ path: '/context.md', to: 'b'.repeat(40) },
+		{ path: '/context.md', from: 'abc1234', to: NEW_COMMIT },
+		{ path: '/context.md', from: OLD_COMMIT },
+		{ path: '/context.md', to: NEW_COMMIT },
 	])('rejects invalid or partial historical commit ranges', async (input) => {
-		await expect(createCaller().getFileDiff(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+		await expect(caller.getFileDiff(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 		expect(mocks.getContextFileDiff).not.toHaveBeenCalled();
 	});
 });
 
 describe('live context update access', () => {
 	beforeEach(() => {
-		vi.resetAllMocks();
-		mocks.getUserRoleInProject.mockResolvedValue('admin');
-		mocks.getGithubToken.mockResolvedValue('github-token');
-		mocks.resolveContextRepository.mockResolvedValue({ provider: 'github' });
 		mocks.getHistoricalContextDiffActions.mockImplementation(async (_context, ranges: unknown[]) =>
 			ranges.map(() => 'update'),
 		);
 		mocks.getContextRepositoryStatus.mockResolvedValue({
 			liveContextUpdate: { enabled: true, available: true, configuredBranch: 'main' },
 		});
-		mocks.sanitizeLiveContextError.mockImplementation((error: unknown) =>
-			error instanceof Error ? error : new Error('Context pull failed.'),
-		);
 		mocks.startContextPullActivity.mockResolvedValue({ id: 'activity-id' });
-		mocks.pullLiveContext.mockReturnValue({
-			changed: false,
-			checkedAt: '2026-08-27T10:00:00.000Z',
-			configuredBranch: 'main',
-			oldCommit: 'a'.repeat(40),
-			newCommit: 'a'.repeat(40),
-			files: [],
-		});
+		mocks.pullLiveContext.mockReturnValue(pullResult({ changed: false, newCommit: OLD_COMMIT, files: [] }));
 	});
 
 	it('records a successful no-change pull for project admins', async () => {
-		await expect(createCaller().pullLiveContext()).resolves.toMatchObject({ changed: false, files: [] });
+		await expect(caller.pullLiveContext()).resolves.toMatchObject({ changed: false, files: [] });
 
 		expect(mocks.startContextPullActivity).toHaveBeenCalledWith('project-id', 'user-id');
 		expect(mocks.pullLiveContext).toHaveBeenCalledWith(
@@ -345,8 +331,8 @@ describe('live context update access', () => {
 		expect(mocks.completeActivity).toHaveBeenCalledWith('activity-id', {
 			configuredBranch: 'main',
 			changed: false,
-			oldCommit: 'a'.repeat(40),
-			newCommit: 'a'.repeat(40),
+			oldCommit: OLD_COMMIT,
+			newCommit: OLD_COMMIT,
 			fileCount: 0,
 			files: [],
 		});
@@ -354,16 +340,9 @@ describe('live context update access', () => {
 
 	it('records changed file details for a successful pull', async () => {
 		const files = [{ path: '/context.md', additions: 2, deletions: 1 }];
-		mocks.pullLiveContext.mockReturnValue({
-			changed: true,
-			checkedAt: '2026-08-27T10:00:00.000Z',
-			configuredBranch: 'main',
-			oldCommit: 'a'.repeat(40),
-			newCommit: 'b'.repeat(40),
-			files,
-		});
+		mocks.pullLiveContext.mockReturnValue(pullResult({ files }));
 
-		await createCaller().pullLiveContext();
+		await caller.pullLiveContext();
 
 		expect(mocks.completeActivity).toHaveBeenCalledWith(
 			'activity-id',
@@ -377,23 +356,16 @@ describe('live context update access', () => {
 			additions: 1,
 			deletions: 0,
 		}));
-		mocks.pullLiveContext.mockReturnValue({
-			changed: true,
-			checkedAt: '2026-08-27T10:00:00.000Z',
-			configuredBranch: 'main',
-			oldCommit: 'a'.repeat(40),
-			newCommit: 'b'.repeat(40),
-			files,
-		});
+		mocks.pullLiveContext.mockReturnValue(pullResult({ files }));
 
-		const result = await createCaller().pullLiveContext();
+		const result = await caller.pullLiveContext();
 
 		expect(result.files).toEqual(files);
 		expect(result.files).toHaveLength(1_001);
 		expect(mocks.completeActivity).toHaveBeenCalledWith(
 			'activity-id',
 			expect.objectContaining({
-				newCommit: 'b'.repeat(40),
+				newCommit: NEW_COMMIT,
 				fileCount: 1_001,
 				files: files.slice(0, 1_000),
 			}),
@@ -410,9 +382,9 @@ describe('live context update access', () => {
 			},
 		]);
 
-		await expect(createCaller().getLiveContextPullHistory()).resolves.toEqual([
+		await expect(caller.getLiveContextPullHistory()).resolves.toEqual([
 			expect.objectContaining({
-				newCommit: 'b'.repeat(40),
+				newCommit: NEW_COMMIT,
 				fileCount: 1_001,
 				files: files.slice(0, 1_000),
 			}),
@@ -424,8 +396,8 @@ describe('live context update access', () => {
 				payload: {
 					configuredBranch: 'main',
 					changed: true,
-					oldCommit: 'a'.repeat(40),
-					newCommit: 'b'.repeat(40),
+					oldCommit: OLD_COMMIT,
+					newCommit: NEW_COMMIT,
 					files,
 				},
 				errorMessage: null,
@@ -435,9 +407,9 @@ describe('live context update access', () => {
 			},
 		]);
 
-		await expect(createCaller().getLiveContextPullHistory()).resolves.toEqual([
+		await expect(caller.getLiveContextPullHistory()).resolves.toEqual([
 			expect.objectContaining({
-				newCommit: 'b'.repeat(40),
+				newCommit: NEW_COMMIT,
 				fileCount: 1_001,
 				files: files.slice(0, 1_000),
 			}),
@@ -445,20 +417,13 @@ describe('live context update access', () => {
 	});
 
 	it('records and parses a first repository clone without an old commit', async () => {
-		mocks.pullLiveContext.mockReturnValue({
-			changed: true,
-			checkedAt: '2026-08-27T10:00:00.000Z',
-			configuredBranch: 'main',
-			oldCommit: null,
-			newCommit: 'b'.repeat(40),
-			files: [{ path: '/context.md', additions: 1, deletions: 0 }],
-		});
+		mocks.pullLiveContext.mockReturnValue(pullResult({ oldCommit: null, files: [CONTEXT_FILE_CHANGE] }));
 
-		await createCaller().pullLiveContext();
+		await caller.pullLiveContext();
 
 		expect(mocks.completeActivity).toHaveBeenCalledWith(
 			'activity-id',
-			expect.objectContaining({ oldCommit: null, newCommit: 'b'.repeat(40) }),
+			expect.objectContaining({ oldCommit: null, newCommit: NEW_COMMIT }),
 		);
 		mocks.listContextPullActivities.mockResolvedValue([
 			{
@@ -468,8 +433,8 @@ describe('live context update access', () => {
 					configuredBranch: 'main',
 					changed: true,
 					oldCommit: null,
-					newCommit: 'b'.repeat(40),
-					files: [{ path: '/context.md', additions: 1, deletions: 0 }],
+					newCommit: NEW_COMMIT,
+					files: [CONTEXT_FILE_CHANGE],
 				},
 				errorMessage: null,
 				startedAt: new Date('2026-08-27T10:00:00.000Z'),
@@ -478,15 +443,15 @@ describe('live context update access', () => {
 			},
 		]);
 
-		await expect(createCaller().getLiveContextPullHistory()).resolves.toEqual([
-			expect.objectContaining({ oldCommit: null, newCommit: 'b'.repeat(40) }),
+		await expect(caller.getLiveContextPullHistory()).resolves.toEqual([
+			expect.objectContaining({ oldCommit: null, newCommit: NEW_COMMIT }),
 		]);
 	});
 
 	it('returns a successful pull when completing its history fails', async () => {
 		mocks.completeActivity.mockRejectedValue(new Error('database unavailable'));
 
-		await expect(createCaller().pullLiveContext()).resolves.toMatchObject({ changed: false });
+		await expect(caller.pullLiveContext()).resolves.toMatchObject({ changed: false });
 
 		expect(mocks.failActivity).not.toHaveBeenCalled();
 		expect(mocks.loggerWarn).toHaveBeenCalledWith('Context pull completed, but its history could not be saved.', {
@@ -504,7 +469,7 @@ describe('live context update access', () => {
 			throw new Error('safe pull failure');
 		});
 
-		await expect(createCaller().pullLiveContext()).rejects.toThrow('safe pull failure');
+		await expect(caller.pullLiveContext()).rejects.toThrow('safe pull failure');
 
 		expect(mocks.failActivity).toHaveBeenCalledWith('activity-id', 'safe pull failure');
 	});
@@ -514,7 +479,7 @@ describe('live context update access', () => {
 			throw new mocks.ContextProjectResolutionError('Configured context subfolder was not found.');
 		});
 
-		await expect(createCaller().pullLiveContext()).rejects.toMatchObject({
+		await expect(caller.pullLiveContext()).rejects.toMatchObject({
 			code: 'BAD_REQUEST',
 			message: 'Configured context subfolder was not found.',
 		});
@@ -525,7 +490,7 @@ describe('live context update access', () => {
 		const setupError = new Error('repository setup failed');
 		mocks.resolveContextRepository.mockRejectedValue(setupError);
 
-		await expect(createCaller().pullLiveContext()).rejects.toMatchObject({
+		await expect(caller.pullLiveContext()).rejects.toMatchObject({
 			code: 'INTERNAL_SERVER_ERROR',
 			message: 'repository setup failed',
 		});
@@ -537,10 +502,10 @@ describe('live context update access', () => {
 	it('lets context admins read status but not pull the live context', async () => {
 		mocks.getUserRoleInProject.mockResolvedValue('context_admin');
 
-		await expect(createCaller().getRepositoryStatus()).resolves.toMatchObject({
+		await expect(caller.getRepositoryStatus()).resolves.toMatchObject({
 			liveContextUpdate: { enabled: true, available: true },
 		});
-		await expect(createCaller().pullLiveContext()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+		await expect(caller.pullLiveContext()).rejects.toMatchObject({ code: 'FORBIDDEN' });
 		expect(mocks.pullLiveContext).not.toHaveBeenCalled();
 	});
 
@@ -554,9 +519,9 @@ describe('live context update access', () => {
 				payload: {
 					configuredBranch: 'main',
 					changed: true,
-					oldCommit: 'a'.repeat(40),
-					newCommit: 'b'.repeat(40),
-					files: [{ path: '/context.md', additions: 1, deletions: 0 }],
+					oldCommit: OLD_COMMIT,
+					newCommit: NEW_COMMIT,
+					files: [CONTEXT_FILE_CHANGE],
 				},
 				errorMessage: null,
 				startedAt: new Date('2026-08-27T11:00:00.000Z'),
@@ -569,8 +534,8 @@ describe('live context update access', () => {
 				payload: {
 					configuredBranch: 'main',
 					changed: false,
-					oldCommit: 'a'.repeat(40),
-					newCommit: 'a'.repeat(40),
+					oldCommit: OLD_COMMIT,
+					newCommit: OLD_COMMIT,
 					files: [],
 				},
 				errorMessage: null,
@@ -589,7 +554,7 @@ describe('live context update access', () => {
 			},
 		]);
 
-		const history = await createCaller().getLiveContextPullHistory();
+		const history = await caller.getLiveContextPullHistory();
 
 		expect(history).toEqual([
 			expect.objectContaining({
@@ -597,12 +562,12 @@ describe('live context update access', () => {
 				changed: true,
 				fileCount: 1,
 				fileExplorerAction: 'open',
-				files: [{ path: '/context.md', additions: 1, deletions: 0 }],
+				files: [CONTEXT_FILE_CHANGE],
 			}),
 			expect.objectContaining({
 				id: 'legacy',
 				changed: false,
-				newCommit: 'a'.repeat(40),
+				newCommit: OLD_COMMIT,
 				fileCount: 0,
 			}),
 			expect.objectContaining({
@@ -618,11 +583,6 @@ describe('live context update access', () => {
 });
 
 describe('context explorer RULES preview groups', () => {
-	beforeEach(() => {
-		vi.resetAllMocks();
-		mocks.getUserRoleInProject.mockResolvedValue('admin');
-	});
-
 	it('returns only minimal groups from the selected project to a context admin', async () => {
 		mocks.getUserRoleInProject.mockResolvedValue('context_admin');
 		mocks.listUserGroups.mockResolvedValue([
@@ -642,23 +602,7 @@ describe('context explorer RULES preview groups', () => {
 			},
 		]);
 
-		await expect(createCaller().getRulesPreviewGroups()).resolves.toEqual({
-			enforced: true,
-			groups: [
-				{ id: 'default-id', name: 'All Users', isDefault: true },
-				{ id: 'finance-id', name: 'Finance', isDefault: false },
-			],
-		});
-		expect(mocks.listUserGroups).toHaveBeenCalledWith('project-id');
-	});
-
-	it('returns enforced preview groups without unlimited entitlement', async () => {
-		mocks.listUserGroups.mockResolvedValue([
-			{ id: 'default-id', name: 'All Users', isDefault: true },
-			{ id: 'finance-id', name: 'Finance', isDefault: false },
-		]);
-
-		await expect(createCaller().getRulesPreviewGroups()).resolves.toEqual({
+		await expect(caller.getRulesPreviewGroups()).resolves.toEqual({
 			enforced: true,
 			groups: [
 				{ id: 'default-id', name: 'All Users', isDefault: true },
@@ -671,20 +615,18 @@ describe('context explorer RULES preview groups', () => {
 	it('rejects users without context administration access', async () => {
 		mocks.getUserRoleInProject.mockResolvedValue('user');
 
-		await expect(createCaller().getRulesPreviewGroups()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+		await expect(caller.getRulesPreviewGroups()).rejects.toMatchObject({ code: 'FORBIDDEN' });
 		expect(mocks.listUserGroups).not.toHaveBeenCalled();
 	});
 });
 
-function createCaller() {
-	return testRouter.createCaller({
-		session: {
-			user: {
-				id: 'user-id',
-				name: 'Test User',
-				email: 'test@example.com',
-			},
-		},
-		selectedProjectId: 'project-id',
-	} as never);
+function pullResult(overrides: Record<string, unknown>) {
+	return {
+		changed: true,
+		checkedAt: '2026-08-27T10:00:00.000Z',
+		configuredBranch: 'main',
+		oldCommit: OLD_COMMIT,
+		newCommit: NEW_COMMIT,
+		...overrides,
+	};
 }

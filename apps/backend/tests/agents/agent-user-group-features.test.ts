@@ -26,7 +26,7 @@ import storyTool from '../../src/agents/tools/story';
 import { env } from '../../src/env';
 import { resolveStoryMode } from '../../src/services/agent';
 import { resolveAgentUserGroupAccess } from '../../src/services/user-group-feature-access.service';
-import type { ToolContext } from '../../src/types/tools';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
 describe('agent user group feature tools', () => {
 	beforeEach(() => {
@@ -65,10 +65,12 @@ describe('agent user group feature tools', () => {
 	});
 
 	it('rejects restricted Story creation before accessing persistence', async () => {
-		const output = await executeStory(
-			{ action: 'create', id: 'new-story', title: 'New Story', code: '# New' },
-			false,
-		);
+		const output = await executeRestrictedStory({
+			action: 'create',
+			id: 'new-story',
+			title: 'New Story',
+			code: '# New',
+		});
 
 		expect(output).toMatchObject({
 			success: false,
@@ -99,7 +101,7 @@ describe('agent user group feature tools', () => {
 		});
 		mocks.createStoryVersion.mockImplementation(async (values) => ({ ...values, version: 2 }));
 
-		const output = await executeStory({ action, id: 'existing-story', ...input }, false);
+		const output = await executeRestrictedStory({ action, id: 'existing-story', ...input });
 
 		expect(output).toMatchObject({ success: true, code: expectedCode, version: 2 });
 		expect(mocks.createStoryVersion).toHaveBeenCalledWith(
@@ -108,21 +110,6 @@ describe('agent user group feature tools', () => {
 	});
 });
 
-async function executeStory(
-	input: Parameters<NonNullable<typeof storyTool.execute>>[0],
-	storyCreationEnabled: boolean,
-) {
-	const context = {
-		chatId: 'chat-id',
-		userId: 'user-id',
-		projectId: 'project-id',
-		userGroupFeatures: storyCreationEnabled ? ['storyCreation'] : [],
-		generatedArtifacts: { charts: [], maps: [], stories: [] },
-	} as unknown as ToolContext;
-
-	return storyTool.execute!(input, {
-		toolCallId: 'tool-call-id',
-		messages: [],
-		experimental_context: context,
-	});
+function executeRestrictedStory(input: Parameters<NonNullable<typeof storyTool.execute>>[0]) {
+	return executeTool(storyTool, input, createToolContext({ userGroupFeatures: [] }));
 }

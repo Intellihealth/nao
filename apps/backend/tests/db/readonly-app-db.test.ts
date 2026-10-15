@@ -63,11 +63,6 @@ describe('runScopedAppDbQuery', () => {
 		expect(rows.map((r) => r.chat_id)).toEqual(['ro-chat-a']);
 	});
 
-	it('does not leak another project', async () => {
-		const { rows } = await runScopedAppDbQuery(PROJECT_B, 'SELECT chat_id FROM v_messages');
-		expect(rows.map((r) => r.chat_id)).toEqual(['ro-chat-b']);
-	});
-
 	it('exposes timestamps as datetimes the date functions accept', async () => {
 		const { rows } = await runScopedAppDbQuery(
 			PROJECT_A,

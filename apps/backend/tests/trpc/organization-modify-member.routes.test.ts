@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const mocks = vi.hoisted(() => ({
 	getUserRoleInOrg: vi.fn(),
 	getUserName: vi.fn(),
@@ -30,6 +32,7 @@ import { organizationRoutes } from '../../src/trpc/organization.routes';
 import { router } from '../../src/trpc/trpc';
 
 const testRouter = router({ organization: organizationRoutes });
+const caller = createTestCaller(testRouter, { userId: 'admin-1', selectedProjectId: null });
 
 describe('organization.modifyMember', () => {
 	beforeEach(() => {
@@ -42,7 +45,7 @@ describe('organization.modifyMember', () => {
 		mocks.isUserConfinedToOrganization.mockResolvedValue(false);
 
 		await expect(
-			createCaller().organization.modifyMember({ userId: 'victim-1', name: 'Pwned', newRole: 'admin' }),
+			caller.organization.modifyMember({ userId: 'victim-1', name: 'Pwned', newRole: 'admin' }),
 		).rejects.toMatchObject({ code: 'FORBIDDEN' });
 		expect(mocks.isUserConfinedToOrganization).toHaveBeenCalledWith('victim-1', 'org-1');
 		expect(mocks.updateUser).not.toHaveBeenCalled();
@@ -52,21 +55,14 @@ describe('organization.modifyMember', () => {
 	it('renames a member who belongs only to this organization', async () => {
 		mocks.isUserConfinedToOrganization.mockResolvedValue(true);
 
-		await createCaller().organization.modifyMember({ userId: 'member-1', name: 'New Name' });
+		await caller.organization.modifyMember({ userId: 'member-1', name: 'New Name' });
 		expect(mocks.updateUser).toHaveBeenCalledWith('member-1', 'New Name');
 	});
 
 	it('lets an admin rename themselves', async () => {
 		mocks.isUserConfinedToOrganization.mockResolvedValue(false);
 
-		await createCaller().organization.modifyMember({ userId: 'admin-1', name: 'New Name' });
+		await caller.organization.modifyMember({ userId: 'admin-1', name: 'New Name' });
 		expect(mocks.updateUser).toHaveBeenCalledWith('admin-1', 'New Name');
 	});
 });
-
-function createCaller() {
-	return testRouter.createCaller({
-		session: { user: { id: 'admin-1', name: 'Admin', email: 'admin@example.com' } },
-		selectedProjectId: null,
-	} as never);
-}

@@ -51,6 +51,7 @@ import { hasMicrosoftGroupsOverage } from '../../src/utils/sso-group-mapping';
 
 const GROUP_1 = 'A0B1C2D3-E4F5-6789-ABCD-EF0123456789';
 const GROUP_2 = '11111111-2222-3333-4444-555555555555';
+const UNLIMITED_WITHOUT_ENV_MAPPINGS = { hasUnlimitedUserGroups: true, entraMappings: [] };
 
 beforeEach(() => {
 	for (const key of Object.keys(mocks.env)) {
@@ -75,25 +76,24 @@ beforeEach(() => {
 
 describe('syncUserGroupsFromMicrosoft', () => {
 	it('uses a standard groups claim directly and normalizes GUIDs', async () => {
-		mocks.decodeClaims.mockReturnValue({
-			status: 'verified',
-			claims: { groups: [GROUP_1, GROUP_1.toLowerCase()] },
-		});
+		mockVerifiedClaims({ groups: [GROUP_1, GROUP_1.toLowerCase()] });
 
 		await syncUserGroupsFromMicrosoft('user-1');
 
 		expect(mocks.decodeClaims).toHaveBeenCalledWith('id-token');
-		expect(mocks.reconcile).toHaveBeenCalledWith('user-1', 'microsoft', [GROUP_1.toLowerCase()], {
-			hasUnlimitedUserGroups: true,
-			entraMappings: [],
-		});
+		expect(mocks.reconcile).toHaveBeenCalledWith(
+			'user-1',
+			'microsoft',
+			[GROUP_1.toLowerCase()],
+			UNLIMITED_WITHOUT_ENV_MAPPINGS,
+		);
 		expect(mocks.syncOrganizationRole).toHaveBeenCalledWith('user-1', [GROUP_1.toLowerCase()]);
 		expect(mocks.listIdentifiers).not.toHaveBeenCalled();
 		expect(mocks.fetch).not.toHaveBeenCalled();
 	});
 
 	it('syncs the organization role when User Group reconciliation rejects', async () => {
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { groups: [GROUP_1] } });
+		mockVerifiedClaims({ groups: [GROUP_1] });
 		mocks.reconcile.mockRejectedValue(new Error('reconciliation failed'));
 
 		await syncUserGroupsFromMicrosoft('user-1');
@@ -103,12 +103,9 @@ describe('syncUserGroupsFromMicrosoft', () => {
 	});
 
 	it('treats a valid empty groups claim as authoritative', async () => {
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { groups: [] } });
+		mockVerifiedClaims({ groups: [] });
 		await syncUserGroupsFromMicrosoft('user-1');
-		expect(mocks.reconcile).toHaveBeenCalledWith('user-1', 'microsoft', [], {
-			hasUnlimitedUserGroups: true,
-			entraMappings: [],
-		});
+		expect(mocks.reconcile).toHaveBeenCalledWith('user-1', 'microsoft', [], UNLIMITED_WITHOUT_ENV_MAPPINGS);
 	});
 
 	it.each([
@@ -129,34 +126,33 @@ describe('syncUserGroupsFromMicrosoft', () => {
 	it.each([{ _claim_names: { groups: 'src1' } }, { hasgroups: true }])(
 		'resolves overage claims with Microsoft Graph',
 		async (claims) => {
-			mocks.decodeClaims.mockReturnValue({ status: 'verified', claims });
+			mockVerifiedClaims(claims);
 			mocks.fetch.mockResolvedValue(graphResponse([GROUP_2]));
 
 			await syncUserGroupsFromMicrosoft('user-1');
 
 			expect(mocks.listIdentifiers).toHaveBeenCalledWith('user-1', 'microsoft', true);
-			expect(mocks.reconcile).toHaveBeenCalledWith('user-1', 'microsoft', [GROUP_2.toLowerCase()], {
-				hasUnlimitedUserGroups: true,
-				entraMappings: [],
-			});
+			expect(mocks.reconcile).toHaveBeenCalledWith(
+				'user-1',
+				'microsoft',
+				[GROUP_2.toLowerCase()],
+				UNLIMITED_WITHOUT_ENV_MAPPINGS,
+			);
 		},
 	);
 
 	it('clears stale rows without Graph when overage has no configured candidates', async () => {
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { hasgroups: true } });
+		mockVerifiedClaims({ hasgroups: true });
 		mocks.listIdentifiers.mockResolvedValue([]);
 
 		await syncUserGroupsFromMicrosoft('user-1');
 
 		expect(mocks.fetch).not.toHaveBeenCalled();
-		expect(mocks.reconcile).toHaveBeenCalledWith('user-1', 'microsoft', [], {
-			hasUnlimitedUserGroups: true,
-			entraMappings: [],
-		});
+		expect(mocks.reconcile).toHaveBeenCalledWith('user-1', 'microsoft', [], UNLIMITED_WITHOUT_ENV_MAPPINGS);
 	});
 
 	it('preserves rows when the Microsoft access token is unavailable or expired', async () => {
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { hasgroups: true } });
+		mockVerifiedClaims({ hasgroups: true });
 		mocks.getLoginTokens.mockResolvedValue({
 			idToken: 'id-token',
 			accessToken: 'expired',
@@ -170,7 +166,7 @@ describe('syncUserGroupsFromMicrosoft', () => {
 	});
 
 	it('preserves rows when any Graph batch fails', async () => {
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { hasgroups: true } });
+		mockVerifiedClaims({ hasgroups: true });
 		mocks.listIdentifiers.mockResolvedValue(createGroupIds(21));
 		mocks.fetch.mockResolvedValueOnce(graphResponse([])).mockResolvedValueOnce(graphResponse([], 403));
 
@@ -191,7 +187,7 @@ describe('syncUserGroupsFromMicrosoft', () => {
 		mocks.hasFeature
 			.mockReset()
 			.mockImplementation((feature: string) => Promise.resolve(feature !== 'user-groups'));
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { groups: [GROUP_1] } });
+		mockVerifiedClaims({ groups: [GROUP_1] });
 		await syncUserGroupsFromMicrosoft('user-1');
 		expect(mocks.hasFeature).toHaveBeenCalledTimes(2);
 		expect(mocks.hasFeature).toHaveBeenNthCalledWith(1, 'sso');
@@ -211,7 +207,7 @@ describe('syncUserGroupsFromMicrosoft', () => {
 	it('synchronizes an env-only User Group mapping without a saved UI mapping', async () => {
 		mocks.hasSyncState.mockResolvedValue(false);
 		mocks.env.AZURE_AD_GROUP_NAO_GROUP_MAPPING = `${GROUP_1}:*:Analysts`;
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { groups: [GROUP_1] } });
+		mockVerifiedClaims({ groups: [GROUP_1] });
 
 		await syncUserGroupsFromMicrosoft('user-1');
 
@@ -226,7 +222,7 @@ describe('syncUserGroupsFromMicrosoft', () => {
 		mocks.env.AZURE_AD_GROUP_NAO_ROLE_MAPPING = `${GROUP_2}:admin`;
 		const uiGroup = '22222222-3333-4444-5555-666666666666';
 		mocks.listIdentifiers.mockResolvedValue([uiGroup]);
-		mocks.decodeClaims.mockReturnValue({ status: 'verified', claims: { hasgroups: true } });
+		mockVerifiedClaims({ hasgroups: true });
 		mocks.fetch.mockResolvedValue(graphResponse([GROUP_2]));
 
 		await syncUserGroupsFromMicrosoft('user-1');
@@ -308,6 +304,10 @@ describe('resolveMicrosoftGraphMemberships', () => {
 		}
 	});
 });
+
+function mockVerifiedClaims(claims: Record<string, unknown>): void {
+	mocks.decodeClaims.mockReturnValue({ status: 'verified', claims });
+}
 
 function createGroupIds(count: number): string[] {
 	return Array.from(

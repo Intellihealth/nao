@@ -27,26 +27,29 @@ vi.mock('../../src/services/cloud-billing-access.service', () => ({
 
 import { deployRoutes } from '../../src/routes/deploy';
 
+const tempDirs: string[] = [];
+
+beforeEach(async () => {
+	vi.clearAllMocks();
+	mocks.validateApiKey.mockResolvedValue({ id: 'organization-id' });
+	await deployRoutes({ post: mocks.post } as never);
+});
+
+afterEach(() => {
+	for (const dir of tempDirs.splice(0)) {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 describe('deploy route cloud billing access', () => {
-	beforeEach(async () => {
-		vi.clearAllMocks();
-		mocks.validateApiKey.mockResolvedValue({ id: 'organization-id' });
+	beforeEach(() => {
 		mocks.assertOrganizationCloudBillingAccess.mockRejectedValue(new Error('Cloud billing access is restricted'));
-		await deployRoutes({ post: mocks.post } as never);
 	});
 
 	it('allows a restricted organization to reach project upload validation', async () => {
-		const send = vi.fn();
-		const status = vi.fn(() => ({ send }));
 		const file = vi.fn().mockResolvedValue(undefined);
 
-		await handler()(
-			{
-				headers: { authorization: 'Bearer nao_valid' },
-				file,
-			},
-			{ status },
-		);
+		const { status, send } = await upload(file);
 
 		expect(mocks.validateApiKey).toHaveBeenCalledWith('nao_valid');
 		expect(file).toHaveBeenCalledOnce();
@@ -57,37 +60,11 @@ describe('deploy route cloud billing access', () => {
 });
 
 describe('deploy route archive validation', () => {
-	const tempDirs: string[] = [];
-
-	beforeEach(async () => {
-		vi.clearAllMocks();
-		mocks.validateApiKey.mockResolvedValue({ id: 'organization-id' });
-		await deployRoutes({ post: mocks.post } as never);
-	});
-
-	afterEach(() => {
-		for (const dir of tempDirs.splice(0)) {
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
 	it('rejects an archive containing a symlink to a server file', async () => {
-		const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-deploy-test-'));
-		tempDirs.push(sourceDir);
-		fs.writeFileSync(path.join(sourceDir, 'nao_config.yaml'), 'project_name: leak\n');
+		const sourceDir = createProjectSourceDir();
 		fs.symlinkSync('/etc/passwd', path.join(sourceDir, 'passwd.txt'));
-		const archive = createArchive(sourceDir);
 
-		const send = vi.fn();
-		const status = vi.fn(() => ({ send }));
-
-		await handler()(
-			{
-				headers: { authorization: 'Bearer nao_valid' },
-				file: vi.fn().mockResolvedValue({ file: toAsyncIterable(archive) }),
-			},
-			{ status },
-		);
+		const { status, send } = await uploadArchive(createArchive(sourceDir));
 
 		expect(status).toHaveBeenCalledWith(400);
 		expect(send).toHaveBeenCalledWith({
@@ -96,23 +73,11 @@ describe('deploy route archive validation', () => {
 	});
 
 	it('rejects an archive containing a nested symlink', async () => {
-		const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-deploy-test-'));
-		tempDirs.push(sourceDir);
-		fs.writeFileSync(path.join(sourceDir, 'nao_config.yaml'), 'project_name: leak\n');
+		const sourceDir = createProjectSourceDir();
 		fs.mkdirSync(path.join(sourceDir, 'docs'));
 		fs.symlinkSync('/etc', path.join(sourceDir, 'docs', 'etc'));
-		const archive = createArchive(sourceDir);
 
-		const send = vi.fn();
-		const status = vi.fn(() => ({ send }));
-
-		await handler()(
-			{
-				headers: { authorization: 'Bearer nao_valid' },
-				file: vi.fn().mockResolvedValue({ file: toAsyncIterable(archive) }),
-			},
-			{ status },
-		);
+		const { status, send } = await uploadArchive(createArchive(sourceDir));
 
 		expect(status).toHaveBeenCalledWith(400);
 		expect(send).toHaveBeenCalledWith({
@@ -120,6 +85,24 @@ describe('deploy route archive validation', () => {
 		});
 	});
 });
+
+function uploadArchive(archive: Buffer) {
+	return upload(vi.fn().mockResolvedValue({ file: toAsyncIterable(archive) }));
+}
+
+async function upload(file: () => Promise<{ file: AsyncIterable<Buffer> } | undefined>) {
+	const send = vi.fn();
+	const status = vi.fn(() => ({ send }));
+	await handler()({ headers: { authorization: 'Bearer nao_valid' }, file }, { status });
+	return { status, send };
+}
+
+function createProjectSourceDir(): string {
+	const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-deploy-test-'));
+	tempDirs.push(sourceDir);
+	fs.writeFileSync(path.join(sourceDir, 'nao_config.yaml'), 'project_name: leak\n');
+	return sourceDir;
+}
 
 function createArchive(sourceDir: string): Buffer {
 	const archivePath = path.join(sourceDir, '..', `${path.basename(sourceDir)}.tar.gz`);

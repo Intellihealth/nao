@@ -101,13 +101,7 @@ import {
 	refreshStoryData,
 } from '../../src/services/live-story';
 
-function querySource(sql: string, databaseId: string | null = null, adminMode = false) {
-	return {
-		fingerprint: createHash('sha256').update(JSON.stringify({ sql, databaseId, adminMode })).digest('hex'),
-		databaseId,
-		adminMode,
-	};
-}
+const WAREHOUSE_STORY_CODE = '<table query_id="query_warehouse" />';
 
 describe('live story SQL execution', () => {
 	beforeEach(() => {
@@ -119,11 +113,7 @@ describe('live story SQL execution', () => {
 		});
 		mocks.getChatOwnerId.mockResolvedValue('owner-1');
 		mocks.getChatProjectId.mockResolvedValue('project-1');
-		mocks.getLatestVersionByChatAndSlug.mockResolvedValue({
-			code: '<table query_id="query_admin" />',
-			isLiveTextDynamic: false,
-			format: 'classic',
-		});
+		mocks.getLatestVersionByChatAndSlug.mockResolvedValue(storyVersion('<table query_id="query_admin" />'));
 		mocks.getSqlQueriesByIds.mockResolvedValue({});
 		mocks.buildToolContext.mockImplementation(async () => ({
 			projectFolder: '/project',
@@ -222,12 +212,8 @@ describe('live story SQL execution', () => {
 	});
 
 	it('refreshes a shared live story as its owner and writes the shared cache', async () => {
-		const code = '<table query_id="query_warehouse" />';
-		mocks.getLatestVersionByChatAndSlug.mockResolvedValue({
-			code,
-			isLiveTextDynamic: false,
-			format: 'classic',
-		});
+		const code = WAREHOUSE_STORY_CODE;
+		mocks.getLatestVersionByChatAndSlug.mockResolvedValue(storyVersion(code));
 		mocks.getSqlQueriesFromCode.mockResolvedValue({
 			query_warehouse: {
 				sqlQuery: 'SELECT * FROM orders',
@@ -235,14 +221,7 @@ describe('live story SQL execution', () => {
 				adminMode: false,
 			},
 		});
-		const fetchMock = vi.fn().mockResolvedValue({
-			ok: true,
-			json: vi.fn().mockResolvedValue({
-				columns: ['order_id'],
-				data: [{ order_id: 1 }],
-			}),
-		});
-		vi.stubGlobal('fetch', fetchMock);
+		const fetchMock = stubWarehouseFetch({ columns: ['order_id'], data: [{ order_id: 1 }] });
 
 		await expect(getStoryQueryData('chat-1', 'orders', code, true, null)).resolves.toMatchObject({
 			queryData: {
@@ -289,7 +268,7 @@ describe('live story SQL execution', () => {
 
 	it('refreshes a local query in DuckDB after re-running the warehouse query it reads from', async () => {
 		const code = '<chart query_id="query_local" />';
-		mocks.getLatestVersionByChatAndSlug.mockResolvedValue({ code, isLiveTextDynamic: false, format: 'classic' });
+		mocks.getLatestVersionByChatAndSlug.mockResolvedValue(storyVersion(code));
 		mocks.getSqlQueriesFromCode.mockResolvedValue({
 			query_local: {
 				sqlQuery: 'SELECT region, sum(amount) AS total FROM query_upstream GROUP BY region',
@@ -304,14 +283,7 @@ describe('live story SQL execution', () => {
 				adminMode: false,
 			},
 		});
-		const fetchMock = vi.fn().mockResolvedValue({
-			ok: true,
-			json: vi.fn().mockResolvedValue({
-				columns: ['region', 'amount'],
-				data: [{ region: 'EU', amount: 10 }],
-			}),
-		});
-		vi.stubGlobal('fetch', fetchMock);
+		const fetchMock = stubWarehouseFetch({ columns: ['region', 'amount'], data: [{ region: 'EU', amount: 10 }] });
 		mocks.runQueryOnLocalFiles.mockImplementation(
 			async (_sql: string, context: { queryResults: Map<string, unknown> }) => ({
 				result: {
@@ -363,7 +335,7 @@ describe('live story SQL execution', () => {
 	});
 
 	it('returns non-live stored data regardless of row security', async () => {
-		const code = '<table query_id="query_warehouse" />';
+		const code = WAREHOUSE_STORY_CODE;
 		const queryData = {
 			query_warehouse: {
 				columns: ['region'],
@@ -384,7 +356,7 @@ describe('live story SQL execution', () => {
 	});
 
 	it('serves a fresh shared cache without building an execution context', async () => {
-		const code = '<table query_id="query_warehouse" />';
+		const code = WAREHOUSE_STORY_CODE;
 		const cache = {
 			queryData: {
 				query_warehouse: {
@@ -408,7 +380,7 @@ describe('live story SQL execution', () => {
 	});
 
 	it('backfills missing data in a fresh legacy cache', async () => {
-		const code = '<table query_id="query_warehouse" />';
+		const code = WAREHOUSE_STORY_CODE;
 		const cachedAt = new Date();
 		const backfilled = {
 			query_warehouse: {
@@ -433,17 +405,8 @@ describe('live story SQL execution', () => {
 	});
 
 	it('falls back to an expired cache when owner refresh fails', async () => {
-		const code = '<table query_id="query_warehouse" />';
-		const cache = {
-			queryData: {
-				query_warehouse: {
-					columns: ['id'],
-					data: [{ id: 1 }],
-				},
-			},
-			querySources: null,
-			cachedAt: new Date(0),
-		};
+		const code = WAREHOUSE_STORY_CODE;
+		const cache = expiredCache();
 		mocks.getStoryDataCacheByChatAndSlug.mockResolvedValue(cache);
 		mocks.getLatestVersionByChatAndSlug.mockRejectedValue(new Error('Warehouse unavailable'));
 
@@ -479,17 +442,8 @@ describe('live story SQL execution', () => {
 	});
 
 	it('serves an expired cache without refreshing when the refresh is deferred', async () => {
-		const code = '<table query_id="query_warehouse" />';
-		const cache = {
-			queryData: {
-				query_warehouse: {
-					columns: ['id'],
-					data: [{ id: 1 }],
-				},
-			},
-			querySources: null,
-			cachedAt: new Date(0),
-		};
+		const code = WAREHOUSE_STORY_CODE;
+		const cache = expiredCache();
 		mocks.getStoryDataCacheByChatAndSlug.mockResolvedValue(cache);
 
 		await expect(
@@ -504,7 +458,7 @@ describe('live story SQL execution', () => {
 	});
 
 	it('serves the chat data of a never-cached story and leaves its first refresh to the caller', async () => {
-		const code = '<table query_id="query_warehouse" />';
+		const code = WAREHOUSE_STORY_CODE;
 		const queryData = {
 			query_warehouse: {
 				columns: ['id'],
@@ -525,26 +479,16 @@ describe('live story SQL execution', () => {
 		expect(mocks.getLatestVersionByChatAndSlug).not.toHaveBeenCalled();
 	});
 
-	it('does not defer the refresh after a failure for a story without queries', async () => {
+	it.each([
+		['the refresh after a failure', { deferRefresh: true }],
+		['the first refresh', { deferFirstRefresh: true }],
+	])('does not defer %s of a story without queries', async (_case, options) => {
 		const code = '# Just a title';
 		mocks.getStoryDataCacheByChatAndSlug.mockResolvedValue(null);
-		mocks.getLatestVersionByChatAndSlug.mockResolvedValue({ code, isLiveTextDynamic: false, format: 'classic' });
+		mocks.getLatestVersionByChatAndSlug.mockResolvedValue(storyVersion(code));
 		mocks.getSqlQueriesFromCode.mockResolvedValue({});
 
-		const result = await getStoryQueryData('chat-1', 'orders', code, true, null, { deferRefresh: true });
-
-		expect(result.needsRefresh).toBeUndefined();
-	});
-
-	it('does not defer the first refresh of a story without queries', async () => {
-		const code = '# Just a title';
-		mocks.getStoryDataCacheByChatAndSlug.mockResolvedValue(null);
-		mocks.getLatestVersionByChatAndSlug.mockResolvedValue({ code, isLiveTextDynamic: false, format: 'classic' });
-		mocks.getSqlQueriesFromCode.mockResolvedValue({});
-
-		await expect(
-			getStoryQueryData('chat-1', 'orders', code, true, null, { deferFirstRefresh: true }),
-		).resolves.toEqual({
+		await expect(getStoryQueryData('chat-1', 'orders', code, true, null, options)).resolves.toEqual({
 			queryData: null,
 			cachedAt: expect.any(Date),
 			code,
@@ -553,13 +497,9 @@ describe('live story SQL execution', () => {
 	});
 
 	it('still refreshes an expired cache inline when only the first refresh is deferred', async () => {
-		const code = '<table query_id="query_warehouse" />';
-		mocks.getStoryDataCacheByChatAndSlug.mockResolvedValue({
-			queryData: { query_warehouse: { columns: ['id'], data: [{ id: 1 }] } },
-			querySources: null,
-			cachedAt: new Date(0),
-		});
-		mocks.getLatestVersionByChatAndSlug.mockResolvedValue({ code, isLiveTextDynamic: false, format: 'classic' });
+		const code = WAREHOUSE_STORY_CODE;
+		mocks.getStoryDataCacheByChatAndSlug.mockResolvedValue(expiredCache());
+		mocks.getLatestVersionByChatAndSlug.mockResolvedValue(storyVersion(code));
 		mocks.getSqlQueriesFromCode.mockResolvedValue({});
 
 		const result = await getStoryQueryData('chat-1', 'orders', code, true, '* * * * *', {
@@ -571,7 +511,7 @@ describe('live story SQL execution', () => {
 	});
 
 	it('falls back to stored data when refresh fails without a cache', async () => {
-		const code = '<table query_id="query_warehouse" />';
+		const code = WAREHOUSE_STORY_CODE;
 		const queryData = {
 			query_warehouse: {
 				columns: ['id'],
@@ -607,3 +547,29 @@ describe('live story SQL execution', () => {
 		expect(mocks.buildToolContext).not.toHaveBeenCalled();
 	});
 });
+
+function querySource(sql: string, databaseId: string | null = null, adminMode = false) {
+	return {
+		fingerprint: createHash('sha256').update(JSON.stringify({ sql, databaseId, adminMode })).digest('hex'),
+		databaseId,
+		adminMode,
+	};
+}
+
+function storyVersion(code: string) {
+	return { code, isLiveTextDynamic: false, format: 'classic' };
+}
+
+function expiredCache() {
+	return {
+		queryData: { query_warehouse: { columns: ['id'], data: [{ id: 1 }] } },
+		querySources: null,
+		cachedAt: new Date(0),
+	};
+}
+
+function stubWarehouseFetch(response: { columns: string[]; data: unknown[] }) {
+	const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue(response) });
+	vi.stubGlobal('fetch', fetchMock);
+	return fetchMock;
+}

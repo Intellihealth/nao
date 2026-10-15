@@ -3,32 +3,32 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { clearNaoignoreCache, toRealPath, toVirtualPath } from '../../src/utils/tools';
+import { clearNaoignoreCache, resolveCanonicalProjectPath, toRealPath, toVirtualPath } from '../../src/utils/tools';
+
+let root: string;
+let projectFolder: string;
+let outside: string;
+
+beforeEach(() => {
+	root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nao-symlink-')));
+	projectFolder = path.join(root, 'project');
+	outside = path.join(root, 'outside');
+	fs.mkdirSync(projectFolder);
+	fs.mkdirSync(outside);
+	fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret');
+	fs.writeFileSync(path.join(projectFolder, 'inside.txt'), 'inside');
+	clearNaoignoreCache();
+});
+
+afterEach(() => {
+	fs.rmSync(root, { recursive: true, force: true });
+});
 
 /**
  * `toRealPath` guards the agent's file tools. A lexical check alone lets a symlink inside the
  * project folder point anywhere on the host, because fs follows the link when the file is read.
  */
 describe('toRealPath with symlinks', () => {
-	let root: string;
-	let projectFolder: string;
-	let outside: string;
-
-	beforeEach(() => {
-		root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nao-symlink-')));
-		projectFolder = path.join(root, 'project');
-		outside = path.join(root, 'outside');
-		fs.mkdirSync(projectFolder);
-		fs.mkdirSync(outside);
-		fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret');
-		fs.writeFileSync(path.join(projectFolder, 'inside.txt'), 'inside');
-		clearNaoignoreCache();
-	});
-
-	afterEach(() => {
-		fs.rmSync(root, { recursive: true, force: true });
-	});
-
 	describe('symlinks escaping the project folder', () => {
 		it('rejects a symlinked file that resolves outside the project folder', () => {
 			fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(projectFolder, 'link.txt'));
@@ -128,3 +128,28 @@ describe('toRealPath with symlinks', () => {
 		});
 	});
 });
+
+describe('canonical project paths', () => {
+	it('resolves a symlinked existing ancestor before appending missing segments', () => {
+		const realDirectory = path.join(projectFolder, 'real');
+		fs.mkdirSync(realDirectory);
+		fs.symlinkSync(realDirectory, path.join(projectFolder, 'alias'), directoryLinkType());
+
+		expect(resolveCanonicalProjectPath('/alias/missing/report.md', projectFolder)).toEqual({
+			realPath: path.join(fs.realpathSync.native(realDirectory), 'missing', 'report.md'),
+			virtualPath: '/real/missing/report.md',
+		});
+	});
+
+	it('rejects a missing target beneath a symlinked ancestor outside the project', () => {
+		fs.symlinkSync(outside, path.join(projectFolder, 'escape'), directoryLinkType());
+
+		expect(() => resolveCanonicalProjectPath('/escape/missing.md', projectFolder)).toThrow(
+			'outside the project folder',
+		);
+	});
+});
+
+function directoryLinkType(): 'dir' | 'junction' {
+	return process.platform === 'win32' ? 'junction' : 'dir';
+}

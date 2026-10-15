@@ -1,23 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { __reloadEnvForTesting, env } from '../../src/env';
+import { restoreProcessEnvAfterEach } from '../helpers/process-env-snapshot';
 
-// MCP_ACCESS_TOKEN_TTL / MCP_REFRESH_TOKEN_TTL are parsed from env at load;
-// __reloadEnvForTesting re-parses process.env in place (without re-running dotenv)
-// so cases can mutate it between runs. It throws with a stable "Invalid env during
-// test reload" message on a validation failure, which the negative cases assert on.
 describe('MCP token TTL env', () => {
-	let originalEnv: typeof process.env;
-
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-		delete process.env.MCP_ACCESS_TOKEN_TTL;
-		delete process.env.MCP_REFRESH_TOKEN_TTL;
-	});
-
-	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
+	restoreProcessEnvAfterEach({
+		unset: ['MCP_ACCESS_TOKEN_TTL', 'MCP_REFRESH_TOKEN_TTL'],
+		afterRestore: __reloadEnvForTesting,
 	});
 
 	it('defaults to 24h access / 7d refresh when unset', () => {

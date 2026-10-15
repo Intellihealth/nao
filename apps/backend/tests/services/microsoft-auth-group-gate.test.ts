@@ -50,6 +50,11 @@ const STOCK_USER_INFO = {
 		sub: 'microsoft-user',
 	},
 };
+const TOKENS = { idToken: 'id-token', accessToken: 'access-token' };
+const UNVERIFIED_MEMBERSHIP_ERROR = {
+	status: 'FORBIDDEN',
+	message: 'Microsoft group membership could not be verified.',
+};
 
 beforeEach(() => {
 	mocks.env.AZURE_AD_GROUP_NAO_ROLE_MAPPING = `${MAPPED_GROUP}:admin`;
@@ -57,10 +62,8 @@ beforeEach(() => {
 	mocks.logger.warn.mockReset();
 	mocks.resolveMicrosoftGraphMemberships.mockReset();
 	mocks.stockGetUserInfo.mockReset().mockResolvedValue(STOCK_USER_INFO);
-	mocks.verifyMicrosoftIdTokenClaims.mockReset().mockResolvedValue({
-		status: 'verified',
-		claims: { groups: [MAPPED_GROUP] },
-	});
+	mocks.verifyMicrosoftIdTokenClaims.mockReset();
+	mockVerifiedClaims({ groups: [MAPPED_GROUP] });
 	mocks.microsoft.mockReset().mockReturnValue({
 		getUserInfo: mocks.stockGetUserInfo,
 	});
@@ -68,104 +71,55 @@ beforeEach(() => {
 
 describe('Microsoft Entra group access gate', () => {
 	it('allows a direct mapped groups claim before loading stock user info', async () => {
-		const getUserInfo = createGetUserInfo();
-		const token = { idToken: 'id-token', accessToken: 'access-token' };
-
-		await expect(getUserInfo(token)).resolves.toEqual(STOCK_USER_INFO);
+		await expect(createGetUserInfo()(TOKENS)).resolves.toEqual(STOCK_USER_INFO);
 		expect(mocks.verifyMicrosoftIdTokenClaims).toHaveBeenCalledWith('id-token');
 		expect(mocks.microsoft).toHaveBeenCalledWith({
 			clientId: 'client-id',
 			clientSecret: 'client-secret',
 			tenantId: 'tenant-id',
 		});
-		expect(mocks.stockGetUserInfo).toHaveBeenCalledWith(token);
+		expect(mocks.stockGetUserInfo).toHaveBeenCalledWith(TOKENS);
 		expect(mocks.resolveMicrosoftGraphMemberships).not.toHaveBeenCalled();
 	});
 
 	it('denies a direct unmapped groups claim before loading stock user info', async () => {
-		mocks.verifyMicrosoftIdTokenClaims.mockResolvedValue({
-			status: 'verified',
-			claims: { groups: [UNMAPPED_GROUP] },
-		});
+		mockVerifiedClaims({ groups: [UNMAPPED_GROUP] });
 
-		await expect(
-			createGetUserInfo()({
-				idToken: 'id-token',
-				accessToken: 'access-token',
-			}),
-		).rejects.toMatchObject({
-			status: 'FORBIDDEN',
-		});
+		await expect(createGetUserInfo()(TOKENS)).rejects.toMatchObject({ status: 'FORBIDDEN' });
 		expect(mocks.stockGetUserInfo).not.toHaveBeenCalled();
 		expect(mocks.resolveMicrosoftGraphMemberships).not.toHaveBeenCalled();
 	});
 
 	it('allows an overage claim when Graph resolves a mapped group', async () => {
-		mocks.verifyMicrosoftIdTokenClaims.mockResolvedValue({
-			status: 'verified',
-			claims: { hasgroups: true },
-		});
+		mockVerifiedClaims({ hasgroups: true });
 		mocks.resolveMicrosoftGraphMemberships.mockResolvedValue([MAPPED_GROUP]);
-		const getUserInfo = createGetUserInfo();
-		const token = { idToken: 'id-token', accessToken: 'access-token' };
 
-		await expect(getUserInfo(token)).resolves.toEqual(STOCK_USER_INFO);
+		await expect(createGetUserInfo()(TOKENS)).resolves.toEqual(STOCK_USER_INFO);
 		expect(mocks.resolveMicrosoftGraphMemberships).toHaveBeenCalledWith('access-token', [MAPPED_GROUP]);
-		expect(mocks.stockGetUserInfo).toHaveBeenCalledWith(token);
+		expect(mocks.stockGetUserInfo).toHaveBeenCalledWith(TOKENS);
 	});
 
 	it('denies an overage claim when Graph resolves no mapped group', async () => {
-		mocks.verifyMicrosoftIdTokenClaims.mockResolvedValue({
-			status: 'verified',
-			claims: { _claim_names: { groups: 'src1' } },
-		});
+		mockVerifiedClaims({ _claim_names: { groups: 'src1' } });
 		mocks.resolveMicrosoftGraphMemberships.mockResolvedValue([]);
 
-		await expect(
-			createGetUserInfo()({
-				idToken: 'id-token',
-				accessToken: 'access-token',
-			}),
-		).rejects.toMatchObject({
-			status: 'FORBIDDEN',
-		});
+		await expect(createGetUserInfo()(TOKENS)).rejects.toMatchObject({ status: 'FORBIDDEN' });
 		expect(mocks.stockGetUserInfo).not.toHaveBeenCalled();
 	});
 
 	it('denies an overage claim when Graph fails', async () => {
-		mocks.verifyMicrosoftIdTokenClaims.mockResolvedValue({
-			status: 'verified',
-			claims: { hasgroups: true },
-		});
+		mockVerifiedClaims({ hasgroups: true });
 		mocks.resolveMicrosoftGraphMemberships.mockRejectedValue(new Error('Graph unavailable'));
 
-		await expect(
-			createGetUserInfo()({
-				idToken: 'id-token',
-				accessToken: 'access-token',
-			}),
-		).rejects.toMatchObject({
-			status: 'FORBIDDEN',
-			message: 'Microsoft group membership could not be verified.',
-		});
+		await expect(createGetUserInfo()(TOKENS)).rejects.toMatchObject(UNVERIFIED_MEMBERSHIP_ERROR);
 		expect(mocks.logger.warn).toHaveBeenCalledOnce();
 		expect(mocks.stockGetUserInfo).not.toHaveBeenCalled();
 	});
 
 	it('denies an overage claim without an access token', async () => {
-		mocks.verifyMicrosoftIdTokenClaims.mockResolvedValue({
-			status: 'verified',
-			claims: { hasgroups: true },
-		});
+		mockVerifiedClaims({ hasgroups: true });
 
-		await expect(
-			createGetUserInfo()({
-				idToken: 'id-token',
-			}),
-		).rejects.toMatchObject({
-			status: 'FORBIDDEN',
-			message: 'Microsoft group membership could not be verified.',
-		});
+		await expect(createGetUserInfo()({ idToken: 'id-token' })).rejects.toMatchObject(UNVERIFIED_MEMBERSHIP_ERROR);
 		expect(mocks.resolveMicrosoftGraphMemberships).not.toHaveBeenCalled();
 		expect(mocks.stockGetUserInfo).not.toHaveBeenCalled();
 	});
@@ -173,15 +127,7 @@ describe('Microsoft Entra group access gate', () => {
 	it.each(['invalid', 'unavailable'] as const)('denies sign-in when ID token verification is %s', async (status) => {
 		mocks.verifyMicrosoftIdTokenClaims.mockResolvedValue({ status });
 
-		await expect(
-			createGetUserInfo()({
-				idToken: 'id-token',
-				accessToken: 'access-token',
-			}),
-		).rejects.toMatchObject({
-			status: 'FORBIDDEN',
-			message: 'Microsoft group membership could not be verified.',
-		});
+		await expect(createGetUserInfo()(TOKENS)).rejects.toMatchObject(UNVERIFIED_MEMBERSHIP_ERROR);
 		expect(mocks.resolveMicrosoftGraphMemberships).not.toHaveBeenCalled();
 		expect(mocks.stockGetUserInfo).not.toHaveBeenCalled();
 	});
@@ -213,6 +159,10 @@ describe('Microsoft Entra group access gate', () => {
 		expect(mocks.stockGetUserInfo).not.toHaveBeenCalled();
 	});
 });
+
+function mockVerifiedClaims(claims: Record<string, unknown>): void {
+	mocks.verifyMicrosoftIdTokenClaims.mockResolvedValue({ status: 'verified', claims });
+}
 
 function createGetUserInfo(): (token: { idToken?: string; accessToken?: string }) => Promise<unknown> {
 	const providers: SocialProviders = {};

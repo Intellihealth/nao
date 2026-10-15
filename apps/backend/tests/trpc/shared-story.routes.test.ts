@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EffectiveUserGroupAccess } from '../../src/queries/user-group.queries';
+import { createTestCaller } from '../helpers/trpc-caller';
 
 const mocks = vi.hoisted(() => ({
 	getSharedStory: vi.fn(),
 	getSharedStoryByStoryId: vi.fn(),
+	getStoryShareAccess: vi.fn(),
 	canUserAccessSharedStory: vi.fn(),
 	getUserRoleInProject: vi.fn(),
 	getStoryByChatAndSlug: vi.fn(),
@@ -13,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 	completeActivity: vi.fn(),
 	failActivity: vi.fn(),
 	getLatestStoryRefreshFailure: vi.fn(),
+	executeLiveQuery: vi.fn(),
 	getStoryQueryData: vi.fn(),
 	refreshStoryData: vi.fn(),
 	assertProjectCloudBillingAccess: vi.fn(),
@@ -32,11 +35,13 @@ vi.mock('../../src/queries/chat.queries', () => ({
 	getChatInfo: vi.fn(),
 }));
 vi.mock('../../src/queries/project.queries', () => ({
+	getProjectByUserId: vi.fn(async () => ({ id: 'project-1', orgId: 'org-1', name: 'Project', path: null })),
 	getUserRoleInProject: mocks.getUserRoleInProject,
 }));
 vi.mock('../../src/queries/shared-story.queries', () => ({
 	getSharedStory: mocks.getSharedStory,
 	getSharedStoryByStoryId: mocks.getSharedStoryByStoryId,
+	getStoryShareAccess: mocks.getStoryShareAccess,
 	canUserAccessSharedStory: mocks.canUserAccessSharedStory,
 }));
 vi.mock('../../src/queries/story.queries', () => ({
@@ -50,9 +55,12 @@ vi.mock('../../src/services/cloud-billing-access.service', () => ({
 	assertProjectCloudBillingAccess: mocks.assertProjectCloudBillingAccess,
 }));
 vi.mock('../../src/services/live-story', () => ({
-	executeLiveQuery: vi.fn(),
+	executeLiveQuery: mocks.executeLiveQuery,
 	getStoryQueryData: mocks.getStoryQueryData,
 	refreshStoryData: mocks.refreshStoryData,
+}));
+vi.mock('../../src/services/shareable-user-groups.service', () => ({
+	filterShareableUserGroupIds: vi.fn(async (_projectId: string, groupIds: string[]) => groupIds),
 }));
 vi.mock('../../src/services/story-filters', () => ({
 	assertStoryFiltersEnabled: vi.fn(),
@@ -74,18 +82,112 @@ import { router } from '../../src/trpc/trpc';
 
 const testRouter = router({ storyShare: sharedStoryRoutes });
 
-describe('shared Story manual refresh', () => {
+beforeEach(() => {
+	vi.resetAllMocks();
+});
+
+describe('storyShare.getSharedStoryInfo', () => {
+	const INPUT = { chatId: 'chat-1', storySlug: 'customers' };
+
 	beforeEach(() => {
-		vi.clearAllMocks();
+		mocks.getStoryByChatAndSlug.mockResolvedValue({ id: 'story-1', projectId: 'project-1' });
+		mocks.getStoryOwnerId.mockResolvedValue('owner-1');
+		mocks.getStoryShareAccess.mockResolvedValue({
+			visibility: 'specific',
+			allowedUserIds: ['recipient-1'],
+			allowedGroupIds: ['group-1'],
+		});
+	});
+
+	it('hides the access list from a project member who does not own the story', async () => {
+		mocks.getUserRoleInProject.mockResolvedValue('user');
+
+		await expect(createCaller('member-1').storyShare.getSharedStoryInfo(INPUT)).resolves.toMatchObject({
+			isShared: false,
+			allowedUserIds: [],
+		});
+		expect(mocks.getStoryShareAccess).not.toHaveBeenCalled();
+	});
+
+	it('shows the access list to the story owner', async () => {
+		mocks.getUserRoleInProject.mockResolvedValue('user');
+
+		await expect(createCaller('owner-1').storyShare.getSharedStoryInfo(INPUT)).resolves.toMatchObject({
+			isShared: true,
+			allowedUserIds: ['recipient-1'],
+		});
+	});
+
+	it('shows the access list to a project admin', async () => {
+		mocks.getUserRoleInProject.mockResolvedValue('admin');
+
+		await expect(createCaller('admin-1').storyShare.getSharedStoryInfo(INPUT)).resolves.toMatchObject({
+			isShared: true,
+			allowedGroupIds: ['group-1'],
+		});
+	});
+});
+
+describe('storyShare.getLiveQueryData', () => {
+	const STORY_CODE =
+		'<chart query_id="q_customers" chart_type="kpi_card" x_axis_key="x" series=\'[{"data_key":"n"}]\' />';
+
+	beforeEach(() => {
 		mocks.getSharedStoryByStoryId.mockResolvedValue({
 			id: 'share-1',
 			projectId: 'project-1',
-			userId: 'sharer-1',
-			visibility: 'project',
+			userId: 'owner-1',
+			visibility: 'specific',
 			storyId: 'story-1',
 			chatId: 'chat-1',
-			slug: 'orders',
+			slug: 'customers',
+			code: STORY_CODE,
 		});
+		mocks.getUserRoleInProject.mockResolvedValue('user');
+		mocks.canUserAccessSharedStory.mockImplementation(
+			async (_shareId: string, userId: string) => userId === 'recipient-1',
+		);
+		mocks.executeLiveQuery.mockResolvedValue({ data: [{ n: 100 }], columns: ['n'] });
+	});
+
+	it('runs a query of the shared story for a recipient', async () => {
+		await expect(
+			createCaller('recipient-1').storyShare.getLiveQueryData({ storyId: 'story-1', queryId: 'q_customers' }),
+		).resolves.toEqual({ data: [{ n: 100 }], columns: ['n'] });
+		expect(mocks.assertProjectCloudBillingAccess).toHaveBeenCalledWith('project-1');
+		expect(mocks.executeLiveQuery).toHaveBeenCalledWith('chat-1', 'q_customers', {
+			billingAccessVerifiedProjectId: 'project-1',
+		});
+	});
+
+	it('refuses a project member the story was not shared with', async () => {
+		await expect(
+			createCaller('member-1').storyShare.getLiveQueryData({ storyId: 'story-1', queryId: 'q_customers' }),
+		).rejects.toMatchObject({ code: 'FORBIDDEN' });
+		expect(mocks.executeLiveQuery).not.toHaveBeenCalled();
+	});
+
+	it('refuses a query of the chat that the shared story does not use', async () => {
+		await expect(
+			createCaller('recipient-1').storyShare.getLiveQueryData({ storyId: 'story-1', queryId: 'q_private' }),
+		).rejects.toMatchObject({ code: 'NOT_FOUND' });
+		expect(mocks.executeLiveQuery).not.toHaveBeenCalled();
+	});
+});
+
+describe('shared Story manual refresh', () => {
+	const SHARED_ORDERS_STORY = {
+		id: 'share-1',
+		projectId: 'project-1',
+		userId: 'sharer-1',
+		visibility: 'project',
+		storyId: 'story-1',
+		chatId: 'chat-1',
+		slug: 'orders',
+	};
+
+	beforeEach(() => {
+		mocks.getSharedStoryByStoryId.mockResolvedValue(SHARED_ORDERS_STORY);
 		mocks.getStoryByChatAndSlug.mockResolvedValue({
 			id: 'story-1',
 			chatId: 'chat-1',
@@ -158,16 +260,7 @@ describe('shared Story manual refresh', () => {
 	});
 
 	it('leaves the data of a shared custom story to its own endpoints', async () => {
-		mocks.getSharedStoryByStoryId.mockResolvedValue({
-			id: 'share-1',
-			projectId: 'project-1',
-			userId: 'sharer-1',
-			visibility: 'project',
-			storyId: 'story-1',
-			chatId: 'chat-1',
-			slug: 'orders',
-			format: 'custom',
-		});
+		mocks.getSharedStoryByStoryId.mockResolvedValue({ ...SHARED_ORDERS_STORY, format: 'custom' });
 
 		const story = await createCaller('owner-1').storyShare.get({ storyId: 'story-1' });
 
@@ -267,10 +360,7 @@ describe('shared Story manual refresh', () => {
 });
 
 function createCaller(userId: string, selectedProjectId = 'project-1') {
-	return testRouter.createCaller({
-		session: { user: { id: userId, name: 'Test User', email: `${userId}@example.com` } },
-		selectedProjectId,
-	} as never);
+	return createTestCaller(testRouter, { userId, selectedProjectId });
 }
 
 function createEffectiveUserGroupAccess(features: EffectiveUserGroupAccess['features'] = []): EffectiveUserGroupAccess {

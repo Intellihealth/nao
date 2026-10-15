@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const mocks = vi.hoisted(() => ({
 	addProjectMember: vi.fn(),
 	addProjectMemberWithUserGroups: vi.fn(),
 	addTeamMember: vi.fn(),
+	getUserName: vi.fn(),
+	getUserProfile: vi.fn(),
+	getUserRoleInProject: vi.fn(),
 	hasFeature: vi.fn(),
+	isUserConfinedToOrganization: vi.fn(),
 	organizationRoleMappingActive: false,
 	updateProjectMemberRole: vi.fn(),
+	updateUser: vi.fn(),
 	UserGroupQueryError: class UserGroupQueryError extends Error {
 		constructor(
 			public readonly code: 'NOT_FOUND' | 'BAD_REQUEST' | 'CONFLICT',
@@ -22,15 +29,17 @@ vi.mock('../../src/auth', () => ({ getAuth: vi.fn() }));
 vi.mock('../../src/queries/memory', () => ({}));
 vi.mock('../../src/queries/project.queries', () => ({
 	addProjectMember: mocks.addProjectMember,
-	getProjectByUserId: vi.fn(async () => ({ id: 'project-id', name: 'Project', path: '/project' })),
+	getProjectByUserId: vi.fn(async () => ({ id: 'project-id', orgId: 'org-id', name: 'Project', path: '/project' })),
 	getProjectMember: vi.fn(),
-	getUserRoleInProject: vi.fn(async () => 'admin'),
+	getUserRoleInProject: mocks.getUserRoleInProject,
 	checkProjectHasMoreThanOneAdmin: vi.fn(async () => true),
 	updateProjectMemberRole: mocks.updateProjectMemberRole,
 }));
 vi.mock('../../src/queries/user.queries', () => ({
-	getUserName: vi.fn(async () => 'Existing User'),
-	updateUser: vi.fn(),
+	getUserProfile: mocks.getUserProfile,
+	getUserName: mocks.getUserName,
+	updateUser: mocks.updateUser,
+	isUserConfinedToOrganization: mocks.isUserConfinedToOrganization,
 }));
 vi.mock('../../src/queries/user-group.queries', () => ({
 	UserGroupQueryError: mocks.UserGroupQueryError,
@@ -58,11 +67,100 @@ import { router } from '../../src/trpc/trpc';
 import { userRoutes } from '../../src/trpc/user.routes';
 
 const testRouter = router(userRoutes);
+const CALLER_ID = 'caller-id';
+const caller = createTestCaller(testRouter, { userId: CALLER_ID });
+
+beforeEach(() => {
+	vi.resetAllMocks();
+	mocks.organizationRoleMappingActive = false;
+});
+
+describe('user.get', () => {
+	beforeEach(() => {
+		mocks.getUserProfile.mockImplementation(async (userId: string) => ({
+			id: userId,
+			name: 'Someone',
+			email: 'someone@example.com',
+			image: null,
+		}));
+	});
+
+	it('refuses an admin reading a user outside their project', async () => {
+		mockRoles({ [CALLER_ID]: 'admin' });
+
+		await expect(caller.get({ userId: 'foreign-user-id' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+		expect(mocks.getUserProfile).not.toHaveBeenCalled();
+	});
+
+	it('refuses a non-admin reading another project member', async () => {
+		mockRoles({ [CALLER_ID]: 'user', 'member-id': 'user' });
+
+		await expect(caller.get({ userId: 'member-id' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+		expect(mocks.getUserProfile).not.toHaveBeenCalled();
+	});
+
+	it('lets an admin read a member of their project', async () => {
+		mockRoles({ [CALLER_ID]: 'admin', 'member-id': 'viewer' });
+
+		await expect(caller.get({ userId: 'member-id' })).resolves.toMatchObject({ id: 'member-id' });
+		expect(mocks.getUserRoleInProject).toHaveBeenCalledWith('project-id', 'member-id');
+	});
+
+	it('lets any user read their own profile', async () => {
+		mockRoles({ [CALLER_ID]: 'viewer' });
+
+		await expect(caller.get({ userId: CALLER_ID })).resolves.toMatchObject({ id: CALLER_ID });
+	});
+});
+
+describe('user.modify', () => {
+	beforeEach(() => {
+		mocks.getUserName.mockResolvedValue('Original Name');
+		mocks.isUserConfinedToOrganization.mockResolvedValue(true);
+	});
+
+	it('refuses an admin renaming a user outside their project', async () => {
+		mockRoles({ [CALLER_ID]: 'admin' });
+
+		await expect(caller.modify({ userId: 'foreign-user-id', name: 'Pwned' })).rejects.toMatchObject({
+			code: 'NOT_FOUND',
+		});
+		expect(mocks.updateUser).not.toHaveBeenCalled();
+		expect(mocks.updateProjectMemberRole).not.toHaveBeenCalled();
+	});
+
+	it('lets an admin rename a member of their project', async () => {
+		mockRoles({ [CALLER_ID]: 'admin', 'member-id': 'user' });
+
+		await caller.modify({ userId: 'member-id', name: 'New Name' });
+		expect(mocks.updateUser).toHaveBeenCalledWith('member-id', 'New Name');
+		expect(mocks.isUserConfinedToOrganization).toHaveBeenCalledWith('member-id', 'org-id');
+	});
+
+	it('refuses an admin renaming a project member who also belongs to another organization', async () => {
+		mockRoles({ [CALLER_ID]: 'admin', 'member-id': 'user' });
+		mocks.isUserConfinedToOrganization.mockResolvedValue(false);
+
+		await expect(caller.modify({ userId: 'member-id', name: 'Pwned', newRole: 'viewer' })).rejects.toMatchObject({
+			code: 'FORBIDDEN',
+		});
+		expect(mocks.updateUser).not.toHaveBeenCalled();
+		expect(mocks.updateProjectMemberRole).not.toHaveBeenCalled();
+	});
+
+	it('lets an admin rename themselves whatever else they belong to', async () => {
+		mockRoles({ [CALLER_ID]: 'admin' });
+		mocks.isUserConfinedToOrganization.mockResolvedValue(false);
+
+		await caller.modify({ userId: CALLER_ID, name: 'New Name' });
+		expect(mocks.updateUser).toHaveBeenCalledWith(CALLER_ID, 'New Name');
+	});
+});
 
 describe('add user to project groups', () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
-		mocks.organizationRoleMappingActive = false;
+		mocks.getUserRoleInProject.mockResolvedValue('admin');
+		mocks.getUserName.mockResolvedValue('Existing User');
 		mocks.hasFeature.mockResolvedValue(true);
 		mocks.validateAssignableUserGroupIds.mockImplementation(async (_projectId, groupIds) => groupIds);
 		mocks.addTeamMember.mockImplementation(async ({ addMember }) => {
@@ -81,7 +179,7 @@ describe('add user to project groups', () => {
 	it('allows project role changes while organization roles are managed by the identity provider', async () => {
 		mocks.organizationRoleMappingActive = true;
 
-		await expect(createCaller().modify({ userId: 'member-id', newRole: 'viewer' })).resolves.toBeUndefined();
+		await expect(caller.modify({ userId: 'member-id', newRole: 'viewer' })).resolves.toBeUndefined();
 		expect(mocks.updateProjectMemberRole).toHaveBeenCalledWith('project-id', 'member-id', 'viewer');
 	});
 
@@ -98,7 +196,7 @@ describe('add user to project groups', () => {
 	it('preserves unlicensed onboarding when no groups are selected', async () => {
 		mocks.hasFeature.mockResolvedValue(false);
 
-		await expect(createCaller().addUserToProject({ email: 'added@example.com' })).resolves.toMatchObject({
+		await expect(caller.addUserToProject({ email: 'added@example.com' })).resolves.toMatchObject({
 			newUser: { id: 'added-user-id' },
 		});
 		expect(mocks.hasFeature).not.toHaveBeenCalled();
@@ -111,7 +209,7 @@ describe('add user to project groups', () => {
 		mocks.hasFeature.mockResolvedValue(false);
 
 		await expect(
-			createCaller().addUserToProject({ email: 'added@example.com', groupIds: ['analysts'] }),
+			caller.addUserToProject({ email: 'added@example.com', groupIds: ['analysts'] }),
 		).resolves.toMatchObject({ newUser: { id: 'added-user-id' } });
 		expect(mocks.validateAssignableUserGroupIds).toHaveBeenCalledWith('project-id', ['analysts']);
 		expect(mocks.addTeamMember).toHaveBeenCalledOnce();
@@ -131,7 +229,7 @@ describe('add user to project groups', () => {
 			);
 
 			await expect(
-				createCaller().addUserToProject({ email: 'added@example.com', groupIds: [groupId] }),
+				caller.addUserToProject({ email: 'added@example.com', groupIds: [groupId] }),
 			).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 			expect(mocks.addTeamMember).not.toHaveBeenCalled();
 			expect(mocks.addProjectMember).not.toHaveBeenCalled();
@@ -140,7 +238,7 @@ describe('add user to project groups', () => {
 	);
 
 	it('deduplicates valid groups and adds the project and group memberships atomically', async () => {
-		await createCaller().addUserToProject({
+		await caller.addUserToProject({
 			email: 'added@example.com',
 			groupIds: ['analysts', 'analysts', 'finance'],
 		});
@@ -159,15 +257,6 @@ describe('add user to project groups', () => {
 	});
 });
 
-function createCaller() {
-	return testRouter.createCaller({
-		session: {
-			user: {
-				id: 'admin-id',
-				name: 'Admin',
-				email: 'admin@example.com',
-			},
-		},
-		selectedProjectId: 'project-id',
-	} as never);
+function mockRoles(roles: Record<string, string>) {
+	mocks.getUserRoleInProject.mockImplementation(async (_projectId: string, userId: string) => roles[userId] ?? null);
 }

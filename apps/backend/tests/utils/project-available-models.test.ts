@@ -1,10 +1,7 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getProjectAvailableModels } from '../../src/utils/llm';
+import { useNaoConfigProjects } from '../helpers/nao-config-project';
 
 const mocks = vi.hoisted(() => ({
 	getProjectById: vi.fn(),
@@ -20,29 +17,14 @@ vi.mock('../../src/queries/project-llm-config.queries', () => ({
 	getProjectLlmConfigByProvider: vi.fn(),
 }));
 
-vi.mock('../../src/utils/logger', () => ({
-	logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-}));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 
-const dirs: string[] = [];
-
-function writeConfig(lines: string[]): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-available-models-'));
-	dirs.push(dir);
-	fs.writeFileSync(path.join(dir, 'nao_config.yaml'), lines.join('\n'));
-	return dir;
-}
+const writeConfig = useNaoConfigProjects('nao-available-models-');
 
 describe('getProjectAvailableModels', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mocks.getProjectLlmConfigs.mockResolvedValue([]);
-	});
-
-	afterEach(() => {
-		while (dirs.length > 0) {
-			fs.rmSync(dirs.pop() as string, { force: true, recursive: true });
-		}
 	});
 
 	it('lists models from every named openai-compatible endpoint in nao_config.yaml', async () => {

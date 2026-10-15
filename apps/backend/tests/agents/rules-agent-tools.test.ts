@@ -1,52 +1,41 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import type { Tool } from 'ai';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import grepTool from '../../src/agents/tools/grep';
 import readTool from '../../src/agents/tools/read';
-import { __reloadEnvForTesting } from '../../src/env';
-import { __resetStorageForTesting } from '../../src/services/storage';
-import type { ToolContext } from '../../src/types/tools';
+import { restoreStorageEnvAfterEach, useStorageBackendWithoutStories } from '../helpers/storage-backend';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
 let projectFolder: string;
-let originalEnv: typeof process.env;
+
+restoreStorageEnvAfterEach();
+const createTemporaryFolder = useTemporaryFolders();
 
 beforeEach(() => {
-	originalEnv = { ...process.env };
-	process.env.NAO_STORAGE_BACKEND = 'none';
-	process.env.BETA_CUSTOM_STORIES_ENABLED = 'false';
-	__reloadEnvForTesting();
-	__resetStorageForTesting();
-	projectFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-rules-tools-'));
+	useStorageBackendWithoutStories('none');
+	projectFolder = createTemporaryFolder('nao-rules-tools-');
 	fs.mkdirSync(path.join(projectFolder, 'docs'), { recursive: true });
 	fs.writeFileSync(path.join(projectFolder, 'docs', 'RULES.md'), 'Nested secret marker\n');
-});
-
-afterEach(() => {
-	process.env = originalEnv;
-	__reloadEnvForTesting();
-	__resetStorageForTesting();
-	fs.rmSync(projectFolder, { recursive: true, force: true });
 });
 
 describe('read RULES.md', () => {
 	it('returns only public and matching content without directives', async () => {
 		writeRules(rulesSource());
 
-		const member = await run(readTool, { file_path: '/RULES.md' }, context(['finance']));
+		const member = await executeTool(readTool, { file_path: '/RULES.md' }, context(['finance']));
 		expect(member.content).toBe('Public\nFinance secret\nShared secret\nDone\n');
 
-		const nonMember = await run(readTool, { file_path: 'RULES.md' }, context(['support']));
+		const nonMember = await executeTool(readTool, { file_path: 'RULES.md' }, context(['support']));
 		expect(nonMember.content).toBe('Public\nDone\n');
 	});
 
 	it('includes all valid block content when enforcement is unlicensed', async () => {
 		writeRules(rulesSource());
 
-		const output = await run(readTool, { file_path: '/RULES.md' }, context(null));
+		const output = await executeTool(readTool, { file_path: '/RULES.md' }, context(null));
 		expect(output.content).toBe('Public\nFinance secret\nShared secret\nDone\n');
 		expect(output.content).not.toContain('{%');
 	});
@@ -54,13 +43,13 @@ describe('read RULES.md', () => {
 	it('fails closed for malformed rules', async () => {
 		writeRules('Public\n{% if group("finance") %}\nSecret\n');
 
-		await expect(run(readTool, { file_path: '/RULES.md' }, context(['finance']))).rejects.toThrow(
+		await expect(executeTool(readTool, { file_path: '/RULES.md' }, context(['finance']))).rejects.toThrow(
 			'could not be rendered safely',
 		);
 	});
 
 	it('leaves nested RULES.md unchanged', async () => {
-		const output = await run(readTool, { file_path: '/docs/RULES.md' }, context([]));
+		const output = await executeTool(readTool, { file_path: '/docs/RULES.md' }, context([]));
 
 		expect(output.content).toBe('Nested secret marker\n');
 	});
@@ -70,10 +59,14 @@ describe('grep RULES.md', () => {
 	it('suppresses excluded and directive matches while retaining allowed matches', async () => {
 		writeRules(rulesSource());
 
-		const excluded = await run(grepTool, { pattern: 'Finance secret|group', path: '/RULES.md' }, context([]));
+		const excluded = await executeTool(
+			grepTool,
+			{ pattern: 'Finance secret|group', path: '/RULES.md' },
+			context([]),
+		);
 		expect(excluded).toMatchObject({ matches: [], total_matches: 0, truncated: false });
 
-		const allowed = await run(
+		const allowed = await executeTool(
 			grepTool,
 			{ pattern: 'Finance secret|Done', path: '/RULES.md', max_results: 1 },
 			context([]),
@@ -86,10 +79,14 @@ describe('grep RULES.md', () => {
 	it('supports multi-group OR conditions for direct and whole-project searches', async () => {
 		writeRules(rulesSource());
 
-		const direct = await run(grepTool, { pattern: 'Shared secret', path: 'RULES.md' }, context(['marketing']));
+		const direct = await executeTool(
+			grepTool,
+			{ pattern: 'Shared secret', path: 'RULES.md' },
+			context(['marketing']),
+		);
 		expect(direct.matches).toHaveLength(1);
 
-		const wholeProject = await run(grepTool, { pattern: 'Shared secret' }, context(['finance']));
+		const wholeProject = await executeTool(grepTool, { pattern: 'Shared secret' }, context(['finance']));
 		expect(wholeProject.matches).toHaveLength(1);
 		expect(wholeProject.matches[0].path).toBe('/RULES.md');
 	});
@@ -97,7 +94,11 @@ describe('grep RULES.md', () => {
 	it('builds context only from the rendered view', async () => {
 		writeRules(rulesSource());
 
-		const output = await run(grepTool, { pattern: 'Done', path: '/', context_lines: 10 }, context(['support']));
+		const output = await executeTool(
+			grepTool,
+			{ pattern: 'Done', path: '/', context_lines: 10 },
+			context(['support']),
+		);
 		expect(output.matches).toHaveLength(1);
 		expect(output.matches[0].context_before).toEqual([{ line_number: 1, line_content: 'Public' }]);
 		expect(JSON.stringify(output.matches[0])).not.toContain('secret');
@@ -107,10 +108,14 @@ describe('grep RULES.md', () => {
 	it('fails closed for malformed root rules without affecting nested files', async () => {
 		writeRules('Public\n{% if group("finance") %}\nSecret marker\n');
 
-		const direct = await run(grepTool, { pattern: 'marker|Public', path: '/RULES.md' }, context(['finance']));
+		const direct = await executeTool(
+			grepTool,
+			{ pattern: 'marker|Public', path: '/RULES.md' },
+			context(['finance']),
+		);
 		expect(direct).toMatchObject({ matches: [], total_matches: 0 });
 
-		const wholeProject = await run(grepTool, { pattern: 'marker|Public' }, context(['finance']));
+		const wholeProject = await executeTool(grepTool, { pattern: 'marker|Public' }, context(['finance']));
 		expect(wholeProject.matches).toHaveLength(1);
 		expect(wholeProject.matches[0].path).toBe('/docs/RULES.md');
 	});
@@ -118,10 +123,10 @@ describe('grep RULES.md', () => {
 	it('searches all block content without directives when enforcement is unlicensed', async () => {
 		writeRules(rulesSource());
 
-		const content = await run(grepTool, { pattern: 'secret', path: '/RULES.md' }, context(null));
+		const content = await executeTool(grepTool, { pattern: 'secret', path: '/RULES.md' }, context(null));
 		expect(content.matches.map((match) => match.line_content)).toEqual(['Finance secret', 'Shared secret']);
 
-		const directives = await run(grepTool, { pattern: 'group', path: '/RULES.md' }, context(null));
+		const directives = await executeTool(grepTool, { pattern: 'group', path: '/RULES.md' }, context(null));
 		expect(directives.matches).toEqual([]);
 	});
 });
@@ -144,22 +149,9 @@ function writeRules(content: string): void {
 	fs.writeFileSync(path.join(projectFolder, 'RULES.md'), content);
 }
 
-function context(groupNames: string[] | null): ToolContext {
-	return {
+function context(groupNames: string[] | null) {
+	return createToolContext({
 		projectFolder,
-		warehouseTableAccess: { enforced: false },
-		docsContextAccess: { enforced: false },
-		filesContextAccess: { enforced: false },
 		userRulesGroupAccess: groupNames === null ? { enforced: false } : { enforced: true, groupNames },
-	} as ToolContext;
-}
-
-async function run<TInput, TOutput>(
-	tool: Tool<TInput, TOutput>,
-	input: TInput,
-	toolContext: ToolContext,
-): Promise<TOutput> {
-	return tool.execute!(input, {
-		experimental_context: toolContext,
-	} as Parameters<NonNullable<typeof tool.execute>>[1]) as Promise<TOutput>;
+	});
 }

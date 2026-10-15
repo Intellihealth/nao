@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync } from 'fs';
 import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getConnections } from '../../src/agents/user-rules';
 import { SystemPrompt } from '../../src/components/ai/system-prompt';
 import { renderToMarkdown } from '../../src/lib/markdown';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
 
 function renderWith(connections: { type: string; database: string }[]): string {
 	return renderToMarkdown(SystemPrompt({ connections }));
@@ -71,15 +71,12 @@ describe('dialect-aware system prompt', () => {
 });
 
 describe('dialect rules end-to-end from a synced project folder', () => {
+	const createTemporaryFolder = useTemporaryFolders();
 	let projectFolder: string;
 
 	beforeEach(() => {
-		projectFolder = mkdtempSync(join(tmpdir(), 'nao-dialect-'));
+		projectFolder = createTemporaryFolder('nao-dialect-');
 		mkdirSync(join(projectFolder, 'databases', 'type=redshift', 'database=analytics'), { recursive: true });
-	});
-
-	afterEach(() => {
-		rmSync(projectFolder, { recursive: true, force: true });
 	});
 
 	it('discovers a redshift connection and injects its dialect rules', () => {

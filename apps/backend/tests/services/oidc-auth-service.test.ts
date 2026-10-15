@@ -38,23 +38,14 @@ describe('oidc-auth.service', () => {
 			expect(isOidcConfigured()).toBe(false);
 		});
 
-		it('returns false when OIDC_CLIENT_ID is missing', () => {
-			mockEnv.OIDC_CLIENT_SECRET = 'secret';
-			mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
-			expect(isOidcConfigured()).toBe(false);
-		});
-
-		it('returns false when OIDC_CLIENT_SECRET is missing', () => {
-			mockEnv.OIDC_CLIENT_ID = 'client-id';
-			mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
-			expect(isOidcConfigured()).toBe(false);
-		});
-
-		it('returns false when OIDC_DISCOVERY_URL is missing', () => {
-			mockEnv.OIDC_CLIENT_ID = 'client-id';
-			mockEnv.OIDC_CLIENT_SECRET = 'secret';
-			expect(isOidcConfigured()).toBe(false);
-		});
+		it.each(['OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_DISCOVERY_URL'])(
+			'returns false when %s is missing',
+			(missingKey) => {
+				setOidcEnv();
+				delete mockEnv[missingKey];
+				expect(isOidcConfigured()).toBe(false);
+			},
+		);
 
 		it('returns true when all required vars are set', () => {
 			setOidcEnv();

@@ -82,36 +82,34 @@ describe('custom story background refresh', () => {
 	it('serves the chat data of a never-cached story without refreshing it', async () => {
 		mocks.getStoryDataCacheByStoryId.mockResolvedValue(null);
 
-		await expect(
-			getCustomStoryQueryData('chat-1', 'orders', 'query_orders', { deferRefresh: true }),
-		).resolves.toEqual(CHAT_ORDERS);
+		await expect(getOrdersQueryData()).resolves.toEqual(CHAT_ORDERS);
 		expect(mocks.refreshStoryData).not.toHaveBeenCalled();
 	});
 
 	it('serves the expired cache of a story whose last refresh failed without refreshing it', async () => {
-		mocks.getStoryDataCacheByStoryId.mockResolvedValue({
-			queryData: { query_orders: CACHED_ORDERS },
-			cachedAt: new Date(0),
-		});
-		mocks.isCacheExpired.mockReturnValue(true);
+		mockExpiredOrdersCache();
 		mocks.getLatestStoryRefreshFailure.mockResolvedValue(FAILURE);
 
-		await expect(
-			getCustomStoryQueryData('chat-1', 'orders', 'query_orders', { deferRefresh: true }),
-		).resolves.toEqual(CACHED_ORDERS);
+		await expect(getOrdersQueryData()).resolves.toEqual(CACHED_ORDERS);
 		expect(mocks.refreshStoryData).not.toHaveBeenCalled();
 	});
 
 	it('still refreshes an expired cache inline when no refresh failed', async () => {
-		mocks.getStoryDataCacheByStoryId.mockResolvedValue({
-			queryData: { query_orders: CACHED_ORDERS },
-			cachedAt: new Date(0),
-		});
-		mocks.isCacheExpired.mockReturnValue(true);
+		mockExpiredOrdersCache();
 
-		await expect(
-			getCustomStoryQueryData('chat-1', 'orders', 'query_orders', { deferRefresh: true }),
-		).resolves.toEqual(REFRESHED_ORDERS);
+		await expect(getOrdersQueryData()).resolves.toEqual(REFRESHED_ORDERS);
 		expect(mocks.refreshStoryData).toHaveBeenCalledWith('chat-1', 'orders');
 	});
 });
+
+function getOrdersQueryData() {
+	return getCustomStoryQueryData('chat-1', 'orders', 'query_orders', { deferRefresh: true });
+}
+
+function mockExpiredOrdersCache(): void {
+	mocks.getStoryDataCacheByStoryId.mockResolvedValue({
+		queryData: { query_orders: CACHED_ORDERS },
+		cachedAt: new Date(0),
+	});
+	mocks.isCacheExpired.mockReturnValue(true);
+}

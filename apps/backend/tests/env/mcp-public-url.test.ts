@@ -1,22 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { restoreProcessEnvAfterEach } from '../helpers/process-env-snapshot';
 
 // MCP_VALID_AUDIENCES / MCP_PUBLIC_SERVER_URL / resolveMcpFacingOrigin are derived from env at
 // module load (like MCP_SERVER_URL), so each case resets the module registry and re-imports env
 // against the current process.env.
 describe('MCP_PUBLIC_URL', () => {
-	let originalEnv: typeof process.env;
-
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-		process.env.BETTER_AUTH_URL = 'https://nao.internal.example';
-		delete process.env.MCP_PUBLIC_URL;
-		vi.resetModules();
+	restoreProcessEnvAfterEach({
+		unset: ['MCP_PUBLIC_URL'],
+		afterRestore: () => {
+			vi.resetModules();
+			vi.restoreAllMocks();
+		},
 	});
 
-	afterEach(() => {
-		process.env = originalEnv;
+	beforeEach(() => {
+		process.env.BETTER_AUTH_URL = 'https://nao.internal.example';
 		vi.resetModules();
-		vi.restoreAllMocks();
 	});
 
 	it('leaves audiences and origin single-host when unset', async () => {

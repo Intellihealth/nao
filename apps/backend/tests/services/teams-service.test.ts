@@ -103,6 +103,11 @@ vi.mock('../../src/utils/messaging-provider', () => ({
 	formatMessagingError: vi.fn(() => 'billing blocked'),
 }));
 
+const INCOMING_MESSAGE = {
+	text: 'question',
+	raw: { from: { aadObjectId: 'aad-id' }, conversation: { tenantId: 'sender-tenant' } },
+};
+
 describe('TeamsService', () => {
 	beforeEach(() => {
 		Object.assign(teamsService as unknown as Record<string, unknown>, {
@@ -126,39 +131,14 @@ describe('TeamsService', () => {
 	});
 
 	it('keeps each webhook handler bound to its project configuration', async () => {
-		const firstConfig: TeamsConfig = {
-			projectId: 'project-a',
-			appId: 'app-a',
-			appPassword: 'password-a',
-			tenantId: 'tenant-a',
-			redirectUrl: 'https://a.example',
-		};
-		const secondConfig: TeamsConfig = {
-			projectId: 'project-b',
-			appId: 'app-b',
-			appPassword: 'password-b',
-			tenantId: 'tenant-b',
-			redirectUrl: 'https://b.example',
-		};
-
-		teamsService.getWebhooks(firstConfig);
+		teamsService.getWebhooks(createTeamsConfig('a'));
 		const firstProjectHandler = teamsHarness.messageHandlers[0];
-		teamsService.getWebhooks(secondConfig);
+		teamsService.getWebhooks(createTeamsConfig('b'));
 		const secondProjectHandler = teamsHarness.messageHandlers[1];
 
-		const thread = {
-			isDM: true,
-			post: vi.fn(async () => ({ edit: vi.fn(), delete: vi.fn() })),
-			subscribe: vi.fn(async () => undefined),
-		};
-		await firstProjectHandler(thread, {
-			text: 'question',
-			raw: { from: { aadObjectId: 'aad-id' }, conversation: { tenantId: 'sender-tenant' } },
-		});
-		await secondProjectHandler(thread, {
-			text: 'question',
-			raw: { from: { aadObjectId: 'aad-id' }, conversation: { tenantId: 'sender-tenant' } },
-		});
+		const thread = createThread();
+		await firstProjectHandler(thread, INCOMING_MESSAGE);
+		await secondProjectHandler(thread, INCOMING_MESSAGE);
 
 		expect(teamsHarness.credentials).toEqual([
 			['sender-tenant', 'app-a', 'password-a'],
@@ -169,29 +149,8 @@ describe('TeamsService', () => {
 	});
 
 	it('passes preverified billing access to agent creation', async () => {
-		const config: TeamsConfig = {
-			projectId: 'project-a',
-			appId: 'app-a',
-			appPassword: 'password-a',
-			tenantId: 'tenant-a',
-			redirectUrl: 'https://a.example',
-		};
-		const response = { edit: vi.fn(), delete: vi.fn() };
-		const thread = {
-			id: 'thread-id',
-			isDM: true,
-			post: vi.fn(async () => response),
-			subscribe: vi.fn(async () => undefined),
-		};
-		teamsHarness.getChatByTeamsThread.mockResolvedValue({ id: 'chat-id' });
-		teamsHarness.getChat.mockResolvedValue([{ id: 'chat-id', messages: [] }]);
-		teamsHarness.createAgent.mockRejectedValue(new Error('stop after agent creation'));
-
-		teamsService.getWebhooks(config);
-		await teamsHarness.messageHandlers[0](thread, {
-			text: 'question',
-			raw: { from: { aadObjectId: 'aad-id' }, conversation: { tenantId: 'sender-tenant' } },
-		});
+		teamsService.getWebhooks(createTeamsConfig('a'));
+		await teamsHarness.messageHandlers[0](createThread(), INCOMING_MESSAGE);
 
 		expect(teamsHarness.createAgent).toHaveBeenCalledWith(
 			expect.objectContaining({ id: 'chat-id', projectId: 'project-a' }),
@@ -201,27 +160,11 @@ describe('TeamsService', () => {
 	});
 
 	it('checks billing access before storing a new thread message', async () => {
-		const config: TeamsConfig = {
-			projectId: 'project-a',
-			appId: 'app-a',
-			appPassword: 'password-a',
-			tenantId: 'tenant-a',
-			redirectUrl: 'https://a.example',
-		};
-		const thread = {
-			id: 'thread-id',
-			isDM: true,
-			post: vi.fn(async () => ({ edit: vi.fn(), delete: vi.fn() })),
-			subscribe: vi.fn(async () => undefined),
-		};
 		teamsHarness.assertProjectCloudBillingAccess.mockRejectedValue(new Error('billing restricted'));
 		teamsHarness.getChatByTeamsThread.mockResolvedValue(null);
 
-		teamsService.getWebhooks(config);
-		await teamsHarness.messageHandlers[0](thread, {
-			text: 'question',
-			raw: { from: { aadObjectId: 'aad-id' }, conversation: { tenantId: 'sender-tenant' } },
-		});
+		teamsService.getWebhooks(createTeamsConfig('a'));
+		await teamsHarness.messageHandlers[0](createThread(), INCOMING_MESSAGE);
 
 		expect(teamsHarness.assertProjectCloudBillingAccess).toHaveBeenCalledWith('project-a');
 		expect(teamsHarness.getChatByTeamsThread).not.toHaveBeenCalled();
@@ -230,3 +173,22 @@ describe('TeamsService', () => {
 		expect(teamsHarness.createAgent).not.toHaveBeenCalled();
 	});
 });
+
+function createTeamsConfig(suffix: string): TeamsConfig {
+	return {
+		projectId: `project-${suffix}`,
+		appId: `app-${suffix}`,
+		appPassword: `password-${suffix}`,
+		tenantId: `tenant-${suffix}`,
+		redirectUrl: `https://${suffix}.example`,
+	};
+}
+
+function createThread() {
+	return {
+		id: 'thread-id',
+		isDM: true,
+		post: vi.fn(async () => ({ edit: vi.fn(), delete: vi.fn() })),
+		subscribe: vi.fn(async () => undefined),
+	};
+}

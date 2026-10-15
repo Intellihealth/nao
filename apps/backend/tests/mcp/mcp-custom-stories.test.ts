@@ -4,10 +4,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import s from '../../src/db/abstractSchema';
 import { db } from '../../src/db/db';
-import type { ToolResult } from '../../src/mcp/logging';
 import { registerAssetTools } from '../../src/mcp/tools/asset-tools';
 import { registerContextLayerTools } from '../../src/mcp/tools/context-layer';
 import * as storyFileQueries from '../../src/queries/story-file.queries';
+import { createMcpContext, FakeMcpServer } from '../helpers/fake-mcp-server';
 
 vi.mock('../../src/db/db', async () => {
 	const { createInMemoryDbWithInlineTransactions } = await import('../helpers/in-memory-db');
@@ -22,46 +22,15 @@ vi.mock('../../src/services/story-app-build', () => ({
 			: { ok: true, app: { kind: 'react', bundle: 'bundle' }, entry: 'app.jsx' },
 }));
 
-type Handler = (args: Record<string, unknown>, extra: unknown) => Promise<ToolResult>;
-
-class FakeMcpServer {
-	readonly handlers = new Map<string, Handler>();
-
-	registerTool(name: string, _config: unknown, handler: Handler): void {
-		this.handlers.set(name, handler);
-	}
-}
-
 const APP_FILES = [
 	{ path: 'nao.json', content: '{ "entry": "app.jsx" }' },
 	{ path: 'app.jsx', content: 'export default function App() { return null; }' },
 ];
 
 const server = new FakeMcpServer();
-registerContextLayerTools(
-	server as never,
-	{
-		userId: 'user-1',
-		projectId: 'project-1',
-		settings: { enabled: true, subAgentModeEnabled: true, contextLayerModeEnabled: true },
-		chartDataMode: false,
-		storyCreationEnabled: true,
-		customStoryCreationEnabled: true,
-	},
-	[],
-);
-registerAssetTools(server as never, {
-	userId: 'user-1',
-	projectId: 'project-1',
-	settings: { enabled: true, subAgentModeEnabled: true, contextLayerModeEnabled: true },
-	chartDataMode: false,
-	storyCreationEnabled: true,
-	customStoryCreationEnabled: true,
-});
-
-function call(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-	return server.handlers.get(name)!(args, {});
-}
+const context = createMcpContext({ storyCreationEnabled: true, customStoryCreationEnabled: true });
+registerContextLayerTools(server.asMcpServer(), context, []);
+registerAssetTools(server.asMcpServer(), context);
 
 describe('MCP custom stories through create_story and update_story', () => {
 	beforeAll(async () => {
@@ -82,7 +51,7 @@ describe('MCP custom stories through create_story and update_story', () => {
 	});
 
 	it('creates and publishes a custom story, returning only its link', async () => {
-		const result = await call('create_story', {
+		const result = await server.call('create_story', {
 			format: 'custom',
 			chat_id: 'chat-1',
 			title: 'Revenue App',
@@ -98,7 +67,7 @@ describe('MCP custom stories through create_story and update_story', () => {
 	});
 
 	it('returns the starter app as an unpublished draft when no files are given', async () => {
-		const result = await call('create_story', { format: 'custom', chat_id: 'chat-1', title: 'Starter' });
+		const result = await server.call('create_story', { format: 'custom', chat_id: 'chat-1', title: 'Starter' });
 
 		expect(result.structuredContent).toMatchObject({ version: 0 });
 		const sourceFiles = (result.structuredContent?.sourceFiles ?? []) as { path: string }[];
@@ -107,10 +76,14 @@ describe('MCP custom stories through create_story and update_story', () => {
 	});
 
 	it('gets an unpublished custom story draft by id', async () => {
-		const created = await call('create_story', { format: 'custom', chat_id: 'chat-1', title: 'Draft Lookup' });
+		const created = await server.call('create_story', {
+			format: 'custom',
+			chat_id: 'chat-1',
+			title: 'Draft Lookup',
+		});
 		const storyId = created.structuredContent?.id as string;
 
-		const result = await call('get_story', { story_id: storyId });
+		const result = await server.call('get_story', { story_id: storyId });
 
 		expect(result.isError).toBeUndefined();
 		expect(result.structuredContent).toMatchObject({
@@ -125,7 +98,7 @@ describe('MCP custom stories through create_story and update_story', () => {
 
 	it('keeps a draft that does not build, then publishes it once update_story fixes it', async () => {
 		buildErrors.current = ['app.jsx: Unexpected token'];
-		const created = await call('create_story', {
+		const created = await server.call('create_story', {
 			format: 'custom',
 			chat_id: 'chat-1',
 			title: 'Broken',
@@ -135,7 +108,7 @@ describe('MCP custom stories through create_story and update_story', () => {
 
 		buildErrors.current = [];
 		const storyId = created.structuredContent?.id as string;
-		const updated = await call('update_story', {
+		const updated = await server.call('update_story', {
 			story_id: storyId,
 			files: [{ path: 'app.jsx', content: 'export default function App() { return 1; }' }],
 		});
@@ -145,7 +118,7 @@ describe('MCP custom stories through create_story and update_story', () => {
 	});
 
 	it('deletes files from the draft and refuses paths that are not in it', async () => {
-		const created = await call('create_story', {
+		const created = await server.call('create_story', {
 			format: 'custom',
 			chat_id: 'chat-1',
 			title: 'Cleanup',
@@ -153,16 +126,16 @@ describe('MCP custom stories through create_story and update_story', () => {
 		});
 		const storyId = created.structuredContent?.id as string;
 
-		const missing = await call('update_story', { story_id: storyId, delete_paths: ['nope.jsx'] });
+		const missing = await server.call('update_story', { story_id: storyId, delete_paths: ['nope.jsx'] });
 		expect(missing.isError).toBe(true);
 
-		await call('update_story', { story_id: storyId, delete_paths: ['old.jsx'] });
+		await server.call('update_story', { story_id: storyId, delete_paths: ['old.jsx'] });
 		const draft = await storyFileQueries.listDraftFiles(storyId);
 		expect(draft.map((file) => file.path)).toEqual(['app.jsx', 'nao.json']);
 	});
 
 	it("refuses another user's chat and story", async () => {
-		const created = await call('create_story', {
+		const created = await server.call('create_story', {
 			format: 'custom',
 			chat_id: 'chat-2',
 			title: 'Theirs',
@@ -173,13 +146,13 @@ describe('MCP custom stories through create_story and update_story', () => {
 		await db
 			.insert(s.story)
 			.values({ id: 'story-2', chatId: 'chat-2', slug: 'theirs', title: 'Theirs', format: 'custom' });
-		const updated = await call('update_story', { story_id: 'story-2', files: APP_FILES });
+		const updated = await server.call('update_story', { story_id: 'story-2', files: APP_FILES });
 		expect(updated.isError).toBe(true);
 	});
 
 	it('refuses a title already used in the chat', async () => {
-		await call('create_story', { format: 'custom', chat_id: 'chat-1', title: 'Twice', files: APP_FILES });
-		const second = await call('create_story', {
+		await server.call('create_story', { format: 'custom', chat_id: 'chat-1', title: 'Twice', files: APP_FILES });
+		const second = await server.call('create_story', {
 			format: 'custom',
 			chat_id: 'chat-1',
 			title: 'Twice',
@@ -190,7 +163,7 @@ describe('MCP custom stories through create_story and update_story', () => {
 	});
 
 	it('keeps classic and custom inputs apart', async () => {
-		const customWithContent = await call('create_story', {
+		const customWithContent = await server.call('create_story', {
 			format: 'custom',
 			chat_id: 'chat-1',
 			title: 'Mixed',
@@ -198,19 +171,19 @@ describe('MCP custom stories through create_story and update_story', () => {
 		});
 		expect(customWithContent.isError).toBe(true);
 
-		const created = await call('create_story', {
+		const created = await server.call('create_story', {
 			format: 'custom',
 			chat_id: 'chat-1',
 			title: 'App',
 			files: APP_FILES,
 		});
 		const storyId = created.structuredContent?.id as string;
-		const updateWithContent = await call('update_story', { story_id: storyId, content: '# Not markdown' });
+		const updateWithContent = await server.call('update_story', { story_id: storyId, content: '# Not markdown' });
 		expect(updateWithContent.isError).toBe(true);
 	});
 
 	it('requires the ask_nao chat a custom story reads its queries from', async () => {
-		const result = await call('create_story', { format: 'custom', title: 'No chat', files: APP_FILES });
+		const result = await server.call('create_story', { format: 'custom', title: 'No chat', files: APP_FILES });
 
 		expect(result.isError).toBe(true);
 		expect(await db.select().from(s.story)).toHaveLength(0);

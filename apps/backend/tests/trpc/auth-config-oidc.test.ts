@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { authConfigRoutes } from '../../src/trpc/auth-config.routes';
+
+type AuthConfigRoutes = typeof authConfigRoutes;
+
 const mockEnv: Record<string, unknown> = {};
 let mockSsoEnabled = true;
 const mockGetGoogleConfig = vi.fn();
@@ -49,9 +53,21 @@ vi.mock('../../src/services/sso-group-mapping.service', async (importOriginal) =
 
 vi.mock('../../src/db/db', () => ({ db: {} }));
 
+const OIDC_ENV = {
+	OIDC_CLIENT_ID: 'client-id',
+	OIDC_CLIENT_SECRET: 'secret',
+	OIDC_DISCOVERY_URL: 'https://example.com/.well-known/openid-configuration',
+};
+const ENTRA_ROLE_MAPPING_ENV = {
+	AZURE_AD_CLIENT_ID: 'client-id',
+	AZURE_AD_CLIENT_SECRET: 'secret',
+	AZURE_AD_TENANT_ID: 'tenant-id',
+	AZURE_AD_GROUP_NAO_ROLE_MAPPING: 'a0b1c2d3-e4f5-6789-abcd-ef0123456789:admin',
+};
+
 describe('authConfigRoutes.oidc.getConfig', () => {
 	beforeEach(() => {
-		Object.keys(mockEnv).forEach((key) => delete mockEnv[key]);
+		resetEnv();
 		mockSsoEnabled = true;
 		mockGetGoogleConfig.mockReset();
 		mockGetGoogleConfig.mockResolvedValue({
@@ -61,34 +77,15 @@ describe('authConfigRoutes.oidc.getConfig', () => {
 		});
 	});
 
-	it('returns null when OIDC_CLIENT_ID is missing', async () => {
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
-
-		const result = await callGetConfig();
-		expect(result).toBeNull();
-	});
-
-	it('returns null when OIDC_CLIENT_SECRET is missing', async () => {
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
-
-		const result = await callGetConfig();
-		expect(result).toBeNull();
-	});
-
-	it('returns null when OIDC_DISCOVERY_URL is missing', async () => {
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
+	it.each(Object.keys(OIDC_ENV))('returns null when %s is missing', async (missingKey) => {
+		resetEnv({ ...OIDC_ENV, [missingKey]: undefined });
 
 		const result = await callGetConfig();
 		expect(result).toBeNull();
 	});
 
 	it('returns config with defaults when all required vars are set', async () => {
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
+		resetEnv(OIDC_ENV);
 
 		const result = await callGetConfig();
 		expect(result).toEqual({
@@ -100,20 +97,19 @@ describe('authConfigRoutes.oidc.getConfig', () => {
 
 	it('returns null when SSO license feature is not enabled', async () => {
 		mockSsoEnabled = false;
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
+		resetEnv(OIDC_ENV);
 
 		const result = await callGetConfig();
 		expect(result).toBeNull();
 	});
 
 	it('returns custom provider ID and name when set', async () => {
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://dev-test.okta.com/oauth2/default/.well-known/openid-configuration';
-		mockEnv.OIDC_PROVIDER_ID = 'okta';
-		mockEnv.OIDC_PROVIDER_NAME = 'Okta';
+		resetEnv({
+			...OIDC_ENV,
+			OIDC_DISCOVERY_URL: 'https://dev-test.okta.com/oauth2/default/.well-known/openid-configuration',
+			OIDC_PROVIDER_ID: 'okta',
+			OIDC_PROVIDER_NAME: 'Okta',
+		});
 
 		const result = await callGetConfig();
 		expect(result).toEqual({
@@ -124,19 +120,13 @@ describe('authConfigRoutes.oidc.getConfig', () => {
 	});
 
 	it('reports roles as IdP-managed when a group mapping is configured', async () => {
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
-		mockEnv.OIDC_GROUP_NAO_ROLE_MAPPING = 'nao-admins:admin';
+		resetEnv({ ...OIDC_ENV, OIDC_GROUP_NAO_ROLE_MAPPING: 'nao-admins:admin' });
 
 		await expect(callGetConfig()).resolves.toMatchObject({ organizationRolesManagedByIdp: true });
 	});
 
 	it('reports roles as editable when the group mapping has no usable entry', async () => {
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
-		mockEnv.OIDC_GROUP_NAO_ROLE_MAPPING = 'nao-context:context_admin,nao-admins:superuser';
+		resetEnv({ ...OIDC_ENV, OIDC_GROUP_NAO_ROLE_MAPPING: 'nao-context:context_admin,nao-admins:superuser' });
 
 		await expect(callGetConfig()).resolves.toMatchObject({ organizationRolesManagedByIdp: false });
 	});
@@ -144,17 +134,12 @@ describe('authConfigRoutes.oidc.getConfig', () => {
 
 describe('authConfigRoutes.sso.getStatus', () => {
 	beforeEach(() => {
-		Object.keys(mockEnv).forEach((key) => delete mockEnv[key]);
+		resetEnv();
 		mockSsoEnabled = true;
 	});
 
 	it('reports Entra-managed organization roles only when configured and licensed', async () => {
-		Object.assign(mockEnv, {
-			AZURE_AD_CLIENT_ID: 'client-id',
-			AZURE_AD_CLIENT_SECRET: 'secret',
-			AZURE_AD_TENANT_ID: 'tenant-id',
-			AZURE_AD_GROUP_NAO_ROLE_MAPPING: 'a0b1c2d3-e4f5-6789-abcd-ef0123456789:admin',
-		});
+		resetEnv(ENTRA_ROLE_MAPPING_ENV);
 
 		await expect(callSsoStatus()).resolves.toEqual({
 			organizationRolesManagedByIdp: true,
@@ -166,16 +151,11 @@ describe('authConfigRoutes.sso.getStatus', () => {
 	});
 
 	it('uses a neutral provider name when OIDC and Entra role mappings are active', async () => {
-		Object.assign(mockEnv, {
-			OIDC_CLIENT_ID: 'client-id',
-			OIDC_CLIENT_SECRET: 'secret',
-			OIDC_DISCOVERY_URL: 'https://example.com/.well-known/openid-configuration',
+		resetEnv({
+			...OIDC_ENV,
 			OIDC_PROVIDER_NAME: 'Okta',
 			OIDC_GROUP_NAO_ROLE_MAPPING: 'nao-admins:admin',
-			AZURE_AD_CLIENT_ID: 'client-id',
-			AZURE_AD_CLIENT_SECRET: 'secret',
-			AZURE_AD_TENANT_ID: 'tenant-id',
-			AZURE_AD_GROUP_NAO_ROLE_MAPPING: 'a0b1c2d3-e4f5-6789-abcd-ef0123456789:admin',
+			...ENTRA_ROLE_MAPPING_ENV,
 		});
 
 		await expect(callSsoStatus()).resolves.toEqual({
@@ -185,17 +165,14 @@ describe('authConfigRoutes.sso.getStatus', () => {
 	});
 
 	it('does not activate Entra role mapping without the Microsoft provider', async () => {
-		mockEnv.AZURE_AD_GROUP_NAO_ROLE_MAPPING = 'a0b1c2d3-e4f5-6789-abcd-ef0123456789:admin';
+		resetEnv({ AZURE_AD_GROUP_NAO_ROLE_MAPPING: ENTRA_ROLE_MAPPING_ENV.AZURE_AD_GROUP_NAO_ROLE_MAPPING });
 		await expect(callSsoStatus()).resolves.toMatchObject({ organizationRolesManagedByIdp: false });
 	});
 });
 
 describe('authConfigRoutes.oidc.inspectToken', () => {
 	beforeEach(() => {
-		Object.keys(mockEnv).forEach((key) => delete mockEnv[key]);
-		mockEnv.OIDC_CLIENT_ID = 'client-id';
-		mockEnv.OIDC_CLIENT_SECRET = 'secret';
-		mockEnv.OIDC_DISCOVERY_URL = 'https://example.com/.well-known/openid-configuration';
+		resetEnv(OIDC_ENV);
 		mockSsoEnabled = true;
 		mockGetUserRoleInProject.mockReset();
 		mockInspectSsoToken.mockReset();
@@ -239,8 +216,7 @@ describe('authConfigRoutes.oidc.inspectToken', () => {
 
 describe('authConfigRoutes.google.isSetup', () => {
 	beforeEach(() => {
-		Object.keys(mockEnv).forEach((key) => delete mockEnv[key]);
-		mockEnv.BETTER_AUTH_URL = 'https://nao.cloud';
+		resetEnv({ BETTER_AUTH_URL: 'https://nao.cloud' });
 		mockGetGoogleConfig.mockReset();
 		mockGetGoogleConfig.mockResolvedValue({
 			clientId: 'org-client',
@@ -273,49 +249,39 @@ describe('authConfigRoutes.google.isSetup', () => {
 	});
 });
 
-async function callGetConfig() {
-	vi.resetModules();
-	const { authConfigRoutes } = await import('../../src/trpc/auth-config.routes');
-	const procedure = authConfigRoutes.oidc.getConfig;
-	// The procedure is a tRPC query — extract the resolver function
-	// @ts-expect-error accessing internal tRPC structure for testing
-	const resolver = procedure._def.query ?? procedure._def.resolver;
-	if (resolver) {
-		return resolver({ ctx: {}, input: undefined });
-	}
-	// Fallback: try calling directly if the structure differs
-	return null;
+function callGetConfig() {
+	return callResolver((routes) => routes.oidc.getConfig);
 }
 
-async function callInspectToken(userId: string) {
-	vi.resetModules();
-	const { authConfigRoutes } = await import('../../src/trpc/auth-config.routes');
-	const procedure = authConfigRoutes.oidc.inspectToken;
-	// @ts-expect-error accessing internal tRPC structure for testing
-	const resolver = procedure._def.query ?? procedure._def.resolver;
-	return resolver({
+function callInspectToken(userId: string) {
+	return callResolver((routes) => routes.oidc.inspectToken, {
 		ctx: { project: { id: 'project-id', orgId: 'org-id' }, user: { id: 'current-user' } },
 		input: { userId },
 	});
 }
 
-async function callSsoStatus() {
-	vi.resetModules();
-	const { authConfigRoutes } = await import('../../src/trpc/auth-config.routes');
-	const procedure = authConfigRoutes.sso.getStatus;
-	// @ts-expect-error accessing internal tRPC structure for testing
-	const resolver = procedure._def.query ?? procedure._def.resolver;
-	return resolver({ ctx: {}, input: undefined });
+function callSsoStatus() {
+	return callResolver((routes) => routes.sso.getStatus);
 }
 
-async function callGoogleIsSetup() {
+function callGoogleIsSetup() {
+	return callResolver((routes) => routes.google.isSetup);
+}
+
+/** Re-imports the routes so module-level env reads see the current `mockEnv`, then runs the raw resolver. */
+async function callResolver(
+	selectProcedure: (routes: AuthConfigRoutes) => unknown,
+	options: { ctx: unknown; input: unknown } = { ctx: {}, input: undefined },
+) {
 	vi.resetModules();
 	const { authConfigRoutes } = await import('../../src/trpc/auth-config.routes');
-	const procedure = authConfigRoutes.google.isSetup;
-	// @ts-expect-error accessing internal tRPC structure for testing
-	const resolver = procedure._def.query ?? procedure._def.resolver;
-	if (resolver) {
-		return resolver({ ctx: {}, input: undefined });
-	}
-	return null;
+	const procedure = selectProcedure(authConfigRoutes) as {
+		_def: { resolver: (options: { ctx: unknown; input: unknown }) => Promise<unknown> };
+	};
+	return procedure._def.resolver(options);
+}
+
+function resetEnv(values: Record<string, unknown> = {}) {
+	Object.keys(mockEnv).forEach((key) => delete mockEnv[key]);
+	Object.assign(mockEnv, values);
 }

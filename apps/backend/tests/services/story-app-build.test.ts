@@ -1,11 +1,7 @@
 import { STORY_DOCUMENT_SLOTS } from '@nao/shared/story-app';
 import { describe, expect, it } from 'vitest';
 
-import { buildStoryApp, type StoryBuildResult } from '../../src/services/story-app-build';
-
-const pageShellOf = (result: StoryBuildResult): string | null => {
-	return result.ok && result.app.kind === 'html' ? result.app.pageShell : null;
-};
+import { buildStoryApp, type StoryBuildResult, type StorySourceFile } from '../../src/services/story-app-build';
 
 describe('buildStoryApp entry', () => {
 	it('builds an entry that default-exports a component', async () => {
@@ -38,38 +34,32 @@ describe('buildStoryApp entry', () => {
 	});
 
 	it('does not guess an html entry without nao.json', async () => {
-		const result = await buildStoryApp([
-			{ path: 'index.html', content: '<html><head></head><body></body></html>' },
-		]);
+		const result = await buildStoryApp([{ path: 'index.html', content: documentWithBody('') }]);
 
 		expect(result).toEqual({ ok: false, errors: [expect.stringContaining('No entry file')] });
 	});
 });
 
 describe('buildStoryApp html entry', () => {
-	const manifest = { path: 'nao.json', content: '{"entry": "index.html"}' };
-
 	it('moves inline and local scripts into the bundle and strips host-owned tags', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{
-				path: 'index.html',
-				content: [
-					'<!doctype html><html><head><meta charset="utf-8">',
-					'<meta http-equiv="Content-Security-Policy" content="default-src *">',
-					'<base href="https://evil.example/">',
-					'<link rel="stylesheet" href="./page.css">',
-					'<script type="importmap">{"imports":{}}</script>',
-					'</head><body><h1>Report</h1>',
-					'<script type="application/json" id="seed">{"kept":true}</script>',
-					'<script>document.title = "inline one";</script>',
-					'<script type="module" src="./main.js"></script>',
-					'</body></html>',
-				].join('\n'),
-			},
-			{ path: 'page.css', content: 'h1 { color: red; }' },
-			{ path: 'main.js', content: 'export const fromMain = nao.theme();' },
-		]);
+		const result = await buildHtmlStory(
+			[
+				'<!doctype html><html><head><meta charset="utf-8">',
+				'<meta http-equiv="Content-Security-Policy" content="default-src *">',
+				'<base href="https://evil.example/">',
+				'<link rel="stylesheet" href="./page.css">',
+				'<script type="importmap">{"imports":{}}</script>',
+				'</head><body><h1>Report</h1>',
+				'<script type="application/json" id="seed">{"kept":true}</script>',
+				'<script>document.title = "inline one";</script>',
+				'<script type="module" src="./main.js"></script>',
+				'</body></html>',
+			].join('\n'),
+			[
+				{ path: 'page.css', content: 'h1 { color: red; }' },
+				{ path: 'main.js', content: 'export const fromMain = nao.theme();' },
+			],
+		);
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) {
@@ -91,7 +81,7 @@ describe('buildStoryApp html entry', () => {
 	});
 
 	it('wraps a fragment into a full document', async () => {
-		const result = await buildStoryApp([manifest, { path: 'index.html', content: '<h1>Only a heading</h1>' }]);
+		const result = await buildHtmlStory('<h1>Only a heading</h1>');
 
 		expect(pageShellOf(result)).toMatch(
 			/<head>[\s\S]*<\/head>[\s\S]*<body>[\s\S]*<h1>Only a heading<\/h1>[\s\S]*<\/body>/,
@@ -99,37 +89,19 @@ describe('buildStoryApp html entry', () => {
 	});
 
 	it('refuses remote scripts', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{
-				path: 'index.html',
-				content: '<html><head></head><body><script src="https://cdn.example/lib.js"></script></body></html>',
-			},
-		]);
+		const result = await buildHtmlStory(documentWithBody('<script src="https://cdn.example/lib.js"></script>'));
 
 		expect(result).toEqual({ ok: false, errors: [expect.stringContaining('is not available to stories')] });
 	});
 
 	it('refuses scripts pointing at files the story does not have', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{
-				path: 'index.html',
-				content: '<html><head></head><body><script src="./missing.js"></script></body></html>',
-			},
-		]);
+		const result = await buildHtmlStory(documentWithBody('<script src="./missing.js"></script>'));
 
 		expect(result).toEqual({ ok: false, errors: [expect.stringContaining('does not point to a')] });
 	});
 
 	it('applies the import allowlist to html scripts', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{
-				path: 'index.html',
-				content: '<html><head></head><body><script type="module">import "lodash";</script></body></html>',
-			},
-		]);
+		const result = await buildHtmlStory(documentWithBody('<script type="module">import "lodash";</script>'));
 
 		expect(result).toEqual({
 			ok: false,
@@ -138,14 +110,9 @@ describe('buildStoryApp html entry', () => {
 	});
 
 	it('places the host slots first in <head> and last in <body>, without the document comments', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{
-				path: 'index.html',
-				content:
-					'<!-- <head> --><!doctype html><html><head><title>T</title></head><body><p>x</p></body></html>',
-			},
-		]);
+		const result = await buildHtmlStory(
+			'<!-- <head> --><!doctype html><html><head><title>T</title></head><body><p>x</p></body></html>',
+		);
 
 		expect(pageShellOf(result)).toBe(
 			`<!doctype html><html><head>${STORY_DOCUMENT_SLOTS.head}<title>T</title></head><body><p>x</p>${STORY_DOCUMENT_SLOTS.body}</body></html>`,
@@ -153,22 +120,13 @@ describe('buildStoryApp html entry', () => {
 	});
 
 	it('refuses content before <head>, where the host policy would be ignored', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{ path: 'index.html', content: '<html><img src="x"><head></head><body></body></html>' },
-		]);
+		const result = await buildHtmlStory('<html><img src="x"><head></head><body></body></html>');
 
 		expect(result).toEqual({ ok: false, errors: [expect.stringContaining('content before <head>')] });
 	});
 
 	it('refuses inline event handlers, which the frame never runs', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{
-				path: 'index.html',
-				content: '<html><head></head><body><button onclick="go()">Go</button></body></html>',
-			},
-		]);
+		const result = await buildHtmlStory(documentWithBody('<button onclick="go()">Go</button>'));
 
 		expect(result).toEqual({ ok: false, errors: [expect.stringContaining('addEventListener')] });
 	});
@@ -178,7 +136,7 @@ describe('buildStoryApp html entry', () => {
 			{ path: 'nao.json', content: '{"entry": "pages/index.html"}' },
 			{
 				path: 'pages/index.html',
-				content: '<html><head></head><body><script type="module">import "./chart.js";</script></body></html>',
+				content: documentWithBody('<script type="module">import "./chart.js";</script>'),
 			},
 			{ path: 'pages/chart.js', content: 'document.title = "from chart";' },
 		]);
@@ -187,14 +145,9 @@ describe('buildStoryApp html entry', () => {
 	});
 
 	it('refuses remote stylesheets other than font providers', async () => {
-		const result = await buildStoryApp([
-			manifest,
-			{
-				path: 'index.html',
-				content:
-					'<html><head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter"><link rel="stylesheet" href="//fonts.googleapis.com/css2?family=Lora"><link rel="stylesheet" href="https://cdn.example/app.css"></head><body></body></html>',
-			},
-		]);
+		const result = await buildHtmlStory(
+			'<html><head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter"><link rel="stylesheet" href="//fonts.googleapis.com/css2?family=Lora"><link rel="stylesheet" href="https://cdn.example/app.css"></head><body></body></html>',
+		);
 
 		expect(result).toEqual({
 			ok: false,
@@ -207,7 +160,7 @@ describe('buildStoryApp html entry', () => {
 			{ path: 'nao.json', content: '{"entry": "pages/index.html"}' },
 			{
 				path: 'pages/index.html',
-				content: '<html><head></head><body><script type="module">import "../../lib.js";</script></body></html>',
+				content: documentWithBody('<script type="module">import "../../lib.js";</script>'),
 			},
 			{ path: 'lib.js', content: 'document.title = "from root";' },
 		]);
@@ -218,3 +171,19 @@ describe('buildStoryApp html entry', () => {
 		});
 	});
 });
+
+function buildHtmlStory(html: string, otherFiles: StorySourceFile[] = []): Promise<StoryBuildResult> {
+	return buildStoryApp([
+		{ path: 'nao.json', content: '{"entry": "index.html"}' },
+		{ path: 'index.html', content: html },
+		...otherFiles,
+	]);
+}
+
+function documentWithBody(body: string): string {
+	return `<html><head></head><body>${body}</body></html>`;
+}
+
+function pageShellOf(result: StoryBuildResult): string | null {
+	return result.ok && result.app.kind === 'html' ? result.app.pageShell : null;
+}

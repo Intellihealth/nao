@@ -12,37 +12,22 @@ const DISTINCTIVE_SQL = 'SELECT customer_email FROM customers';
 const DISTINCTIVE_ROW_VALUE = 'private-customer@example.com';
 
 describe('redactDataToolAttributes', () => {
-	it('redacts execute_sql arguments and results while preserving tool identity', () => {
+	it.each([
+		{ toolName: 'execute_sql', toolCallId: 'tool-call-1', args: { query: DISTINCTIVE_SQL } },
+		{ toolName: 'read_query_result', toolCallId: 'tool-call-2', args: { queryId: 'query-123' } },
+	])('redacts $toolName arguments and results while preserving tool identity', ({ toolName, toolCallId, args }) => {
 		const attributes: Attributes = {
-			'ai.toolCall.name': 'execute_sql',
-			'ai.toolCall.id': 'tool-call-1',
-			'ai.toolCall.args': JSON.stringify({ query: DISTINCTIVE_SQL }),
+			'ai.toolCall.name': toolName,
+			'ai.toolCall.id': toolCallId,
+			'ai.toolCall.args': JSON.stringify(args),
 			'ai.toolCall.result': JSON.stringify([{ customer_email: DISTINCTIVE_ROW_VALUE }]),
 		};
 
 		redactDataToolAttributes(attributes);
 
 		expect(attributes).toEqual({
-			'ai.toolCall.name': 'execute_sql',
-			'ai.toolCall.id': 'tool-call-1',
-			'ai.toolCall.args': LANGFUSE_REDACTION_PLACEHOLDER,
-			'ai.toolCall.result': LANGFUSE_REDACTION_PLACEHOLDER,
-		});
-	});
-
-	it('redacts read_query_result arguments and results while preserving tool identity', () => {
-		const attributes: Attributes = {
-			'ai.toolCall.name': 'read_query_result',
-			'ai.toolCall.id': 'tool-call-2',
-			'ai.toolCall.args': JSON.stringify({ queryId: 'query-123' }),
-			'ai.toolCall.result': JSON.stringify([{ customer_email: DISTINCTIVE_ROW_VALUE }]),
-		};
-
-		redactDataToolAttributes(attributes);
-
-		expect(attributes).toEqual({
-			'ai.toolCall.name': 'read_query_result',
-			'ai.toolCall.id': 'tool-call-2',
+			'ai.toolCall.name': toolName,
+			'ai.toolCall.id': toolCallId,
 			'ai.toolCall.args': LANGFUSE_REDACTION_PLACEHOLDER,
 			'ai.toolCall.result': LANGFUSE_REDACTION_PLACEHOLDER,
 		});

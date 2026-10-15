@@ -1,13 +1,10 @@
-import os from 'node:os';
-import path from 'node:path';
-
 import type { Tool } from 'ai';
-import fs from 'fs/promises';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import grepTool from '../../src/agents/tools/grep';
 import { __reloadEnvForTesting } from '../../src/env';
-import type { ToolContext } from '../../src/types/tools';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
 vi.mock('../../src/db/db', () => ({ db: {} }));
 vi.mock('../../src/services/story-mount', async (importOriginal) => ({
@@ -20,14 +17,11 @@ vi.mock('../../src/services/story-mount', async (importOriginal) => ({
 }));
 
 let projectFolder: string;
+const createTemporaryFolder = useTemporaryFolders();
 
-beforeEach(async () => {
-	projectFolder = await fs.mkdtemp(path.join(os.tmpdir(), 'nao-story-grep-test-'));
+beforeEach(() => {
+	projectFolder = createTemporaryFolder('nao-story-grep-test-');
 	__reloadEnvForTesting();
-});
-
-afterEach(async () => {
-	await fs.rm(projectFolder, { recursive: true, force: true });
 });
 
 describe('grep over custom story drafts', () => {
@@ -53,21 +47,10 @@ describe('grep over custom story drafts', () => {
 	});
 });
 
-async function run(input: { pattern: string; path?: string }) {
-	const tool = grepTool as Tool<typeof input, { matches: { path: string }[] }>;
-	return tool.execute!(input, {
-		experimental_context: {
-			projectFolder,
-			projectId: 'proj-1',
-			userId: 'user-1',
-			chatId: 'chat-1',
-			warehouseTableAccess: { enforced: false },
-			warehouseRowSecurity: { enforced: false },
-			docsContextAccess: { enforced: false },
-			userGroupFeatures: [],
-			userRulesGroupAccess: { enforced: false },
-		} as unknown as ToolContext,
-	} as Parameters<NonNullable<typeof tool.execute>>[1]) as Promise<{
-		matches: { path: string; line_number: number; line_content: string }[];
-	}>;
+function run(input: { pattern: string; path?: string }) {
+	const tool = grepTool as Tool<
+		typeof input,
+		{ matches: { path: string; line_number: number; line_content: string }[] }
+	>;
+	return executeTool(tool, input, createToolContext({ projectFolder }));
 }

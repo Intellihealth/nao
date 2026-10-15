@@ -1,20 +1,21 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getSystemPromptOverride, hasNaoPromptPlaceholder, injectNaoPrompt } from '../../src/agents/system-prompts';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
 
 describe('getSystemPromptOverride (real filesystem)', () => {
+	const createTemporaryFolder = useTemporaryFolders();
 	let projectFolder: string;
 
 	beforeEach(() => {
-		projectFolder = mkdtempSync(join(tmpdir(), 'nao-prompts-'));
+		projectFolder = createTemporaryFolder('nao-prompts-');
 		mkdirSync(join(projectFolder, 'agent', 'prompts'), { recursive: true });
 	});
 
 	afterEach(() => {
-		rmSync(projectFolder, { recursive: true, force: true });
+		vi.restoreAllMocks();
 	});
 
 	function writePrompt(filename: string, content: string): void {
@@ -51,21 +52,15 @@ describe('getSystemPromptOverride (real filesystem)', () => {
 	});
 
 	it('refuses to follow a symlink that points outside the project folder', () => {
-		const secretDir = mkdtempSync(join(tmpdir(), 'nao-secret-'));
-		const secretFile = join(secretDir, 'secret.md');
+		const secretFile = join(createTemporaryFolder('nao-secret-'), 'secret.md');
 		writeFileSync(secretFile, 'TOP SECRET HOST FILE', 'utf-8');
 		symlinkSync(secretFile, join(projectFolder, 'agent', 'prompts', 'system.md'));
 		const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-		try {
-			expect(getSystemPromptOverride(projectFolder)).toBeUndefined();
-			expect(consoleSpy).toHaveBeenCalledWith(
-				expect.stringContaining('Refusing to read system prompt override outside the project folder'),
-			);
-		} finally {
-			consoleSpy.mockRestore();
-			rmSync(secretDir, { recursive: true, force: true });
-		}
+		expect(getSystemPromptOverride(projectFolder)).toBeUndefined();
+		expect(consoleSpy).toHaveBeenCalledWith(
+			expect.stringContaining('Refusing to read system prompt override outside the project folder'),
+		);
 	});
 
 	it('composes the default prompt into a file that keeps the {{ nao_prompt }} placeholder', () => {

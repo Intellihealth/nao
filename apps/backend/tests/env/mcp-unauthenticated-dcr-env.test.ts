@@ -1,21 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { __reloadEnvForTesting, env } from '../../src/env';
+import { restoreProcessEnvAfterEach } from '../helpers/process-env-snapshot';
 
-// ALLOW_UNAUTHENTICATED_DCR is parsed from env at load; __reloadEnvForTesting re-parses
-// process.env in place (without re-running dotenv) so cases can mutate it between runs.
 describe('ALLOW_UNAUTHENTICATED_DCR env', () => {
-	let originalEnv: typeof process.env;
-
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-		delete process.env.ALLOW_UNAUTHENTICATED_DCR;
-	});
-
-	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
-	});
+	restoreProcessEnvAfterEach({ unset: ['ALLOW_UNAUTHENTICATED_DCR'], afterRestore: __reloadEnvForTesting });
 
 	it('defaults to true (preserves prior behavior)', () => {
 		__reloadEnvForTesting();

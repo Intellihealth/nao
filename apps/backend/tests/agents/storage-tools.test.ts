@@ -1,10 +1,8 @@
-import os from 'node:os';
 import path from 'node:path';
 
-import type { UserRulesGroupAccess } from '@nao/shared/rules-template';
 import type { Tool } from 'ai';
 import fs from 'fs/promises';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import grepTool from '../../src/agents/tools/grep';
 import listTool from '../../src/agents/tools/list';
@@ -13,54 +11,33 @@ import searchTool from '../../src/agents/tools/search';
 import writeTool from '../../src/agents/tools/write';
 import { __reloadEnvForTesting } from '../../src/env';
 import type { WarehouseTableAccess } from '../../src/services/context-access';
-import { __resetStorageForTesting } from '../../src/services/storage';
 import type {
 	ResolvedDocsContextAccess,
 	ResolvedFilesContextAccess,
 } from '../../src/services/user-group-context-access.service';
-import type { ToolContext } from '../../src/types/tools';
+import { restoreStorageEnvAfterEach, useStorageBackendWithoutStories } from '../helpers/storage-backend';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
-// The tools reach the database only for the /stories mount, which stays disabled in this suite.
 vi.mock('../../src/db/db', () => ({ db: {} }));
 
 let storageRoot: string;
 let projectFolder: string;
-let originalEnv: typeof process.env;
 let warehouseTableAccess: WarehouseTableAccess;
 let docsContextAccess: ResolvedDocsContextAccess;
 let filesContextAccess: ResolvedFilesContextAccess;
-const userRulesGroupAccess: UserRulesGroupAccess = { enforced: false };
 
-const context = () =>
-	({
-		projectFolder,
-		projectId: 'proj-1',
-		userId: 'user-1',
-		warehouseTableAccess,
-		warehouseRowSecurity: { enforced: false },
-		docsContextAccess,
-		filesContextAccess,
-		userGroupFeatures: [],
-		userRulesGroupAccess,
-	}) as unknown as ToolContext;
+restoreStorageEnvAfterEach();
+const createTemporaryFolder = useTemporaryFolders();
 
-beforeEach(async () => {
-	originalEnv = { ...process.env };
-	storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nao-storage-tools-'));
-	projectFolder = await fs.mkdtemp(path.join(os.tmpdir(), 'nao-project-tools-'));
+beforeEach(() => {
+	storageRoot = createTemporaryFolder('nao-storage-tools-');
+	projectFolder = createTemporaryFolder('nao-project-tools-');
 	warehouseTableAccess = { enforced: false };
 	docsContextAccess = { enforced: false };
 	filesContextAccess = { enforced: false };
 
 	useBackend('local');
-});
-
-afterEach(async () => {
-	process.env = originalEnv;
-	__reloadEnvForTesting();
-	__resetStorageForTesting();
-	await fs.rm(storageRoot, { recursive: true, force: true });
-	await fs.rm(projectFolder, { recursive: true, force: true });
 });
 
 describe('write', () => {
@@ -496,21 +473,18 @@ describe('when permanent storage is disabled', () => {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function run<TInput>(tool: Tool<TInput, any>, input: TInput) {
-	return tool.execute!(input, {
-		experimental_context: context(),
-	} as Parameters<NonNullable<typeof tool.execute>>[1]);
+function run<TInput>(tool: Tool<TInput, any>, input: TInput) {
+	return executeTool(
+		tool,
+		input,
+		createToolContext({ projectFolder, warehouseTableAccess, docsContextAccess, filesContextAccess }),
+	);
 }
 
 function readStorageFile(relativePath: string): Promise<string> {
-	return fs.readFile(path.join(storageRoot, 'projects/proj-1/users/user-1', relativePath), 'utf-8');
+	return fs.readFile(path.join(storageRoot, 'projects/project-1/users/user-1', relativePath), 'utf-8');
 }
 
 function useBackend(backend: 'none' | 'local' | 's3'): void {
-	process.env.BETA_CUSTOM_STORIES_ENABLED = 'false';
-	process.env.NAO_STORAGE_BACKEND = backend;
-	process.env.NAO_STORAGE_LOCAL_PATH = storageRoot;
-	process.env.NAO_STORAGE_S3_BUCKET = 'test-bucket';
-	__reloadEnvForTesting();
-	__resetStorageForTesting();
+	useStorageBackendWithoutStories(backend, storageRoot);
 }

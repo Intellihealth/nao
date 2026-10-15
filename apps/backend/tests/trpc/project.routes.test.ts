@@ -4,8 +4,13 @@ import path from 'node:path';
 
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const testState = vi.hoisted(() => ({
+import { createTestCaller } from '../helpers/trpc-caller';
+
+const mocks = vi.hoisted(() => ({
 	projectPath: '',
+	listProjectMembersWithRoles: vi.fn(),
+	regenerateMessagingProviderCode: vi.fn(),
+	isUserConfinedToOrganization: vi.fn(),
 	upsertProjectLlmConfig: vi.fn(),
 }));
 
@@ -13,13 +18,16 @@ vi.mock('../../src/queries/project.queries', () => ({
 	getProjectById: vi.fn(async () => project()),
 	getProjectByUserId: vi.fn(async () => project()),
 	getUserRoleInProject: vi.fn(async () => 'admin'),
+	listProjectMembersWithRoles: mocks.listProjectMembersWithRoles,
 }));
-
+vi.mock('../../src/queries/user.queries', () => ({
+	regenerateMessagingProviderCode: mocks.regenerateMessagingProviderCode,
+	isUserConfinedToOrganization: mocks.isUserConfinedToOrganization,
+}));
 vi.mock('../../src/queries/project-llm-config.queries', () => ({
 	getProjectLlmConfigByProvider: vi.fn(() => null),
-	upsertProjectLlmConfig: testState.upsertProjectLlmConfig,
+	upsertProjectLlmConfig: mocks.upsertProjectLlmConfig,
 }));
-
 vi.mock('../../src/queries/chat.queries', () => ({}));
 vi.mock('../../src/queries/project-saved-prompt.queries', () => ({}));
 vi.mock('../../src/queries/project-slack-config.queries', () => ({}));
@@ -27,7 +35,6 @@ vi.mock('../../src/queries/project-teams-config.queries', () => ({}));
 vi.mock('../../src/queries/project-telegram-config.queries', () => ({}));
 vi.mock('../../src/queries/project-whatsapp-config.queries', () => ({}));
 vi.mock('../../src/queries/project-whatsapp-link.queries', () => ({}));
-vi.mock('../../src/queries/user.queries', () => ({}));
 vi.mock('../../src/agents/user-rules', () => ({ getDatabaseObjects: vi.fn() }));
 vi.mock('../../src/auth', () => ({ getAuth: vi.fn() }));
 vi.mock('../../src/services/posthog', () => ({ posthog: {}, PostHogEvent: {} }));
@@ -41,12 +48,46 @@ import { projectRoutes } from '../../src/trpc/project.routes';
 import { router } from '../../src/trpc/trpc';
 
 const testRouter = router(projectRoutes);
-const directories: string[] = [];
+const CALLER_ID = 'admin-id';
+const caller = createTestCaller(testRouter, { userId: CALLER_ID });
+const configDirectories: string[] = [];
+
+describe('project.regenerateMessagingProviderCode', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.listProjectMembersWithRoles.mockResolvedValue([{ id: CALLER_ID }, { id: 'member-id' }]);
+		mocks.regenerateMessagingProviderCode.mockResolvedValue('new-code');
+	});
+
+	it('refuses to reset the code of a member who also belongs to another organization', async () => {
+		mocks.isUserConfinedToOrganization.mockResolvedValue(false);
+
+		await expect(caller.regenerateMessagingProviderCode({ userId: 'member-id' })).rejects.toMatchObject({
+			code: 'FORBIDDEN',
+		});
+		expect(mocks.isUserConfinedToOrganization).toHaveBeenCalledWith('member-id', 'org-id');
+		expect(mocks.regenerateMessagingProviderCode).not.toHaveBeenCalled();
+	});
+
+	it('resets the code of a member who only belongs to this organization', async () => {
+		mocks.isUserConfinedToOrganization.mockResolvedValue(true);
+
+		await expect(caller.regenerateMessagingProviderCode({ userId: 'member-id' })).resolves.toBe('new-code');
+		expect(mocks.regenerateMessagingProviderCode).toHaveBeenCalledWith('member-id');
+	});
+
+	it('lets an admin reset their own code whatever else they belong to', async () => {
+		mocks.isUserConfinedToOrganization.mockResolvedValue(false);
+
+		await expect(caller.regenerateMessagingProviderCode({ userId: CALLER_ID })).resolves.toBe('new-code');
+		expect(mocks.regenerateMessagingProviderCode).toHaveBeenCalledWith(CALLER_ID);
+	});
+});
 
 describe('project LLM config overrides', () => {
 	beforeEach(() => {
-		testState.upsertProjectLlmConfig.mockReset();
-		testState.upsertProjectLlmConfig.mockImplementation((config) => ({
+		mocks.upsertProjectLlmConfig.mockReset();
+		mocks.upsertProjectLlmConfig.mockImplementation((config) => ({
 			id: 'config-id',
 			...config,
 			credentials: config.credentials ?? null,
@@ -61,7 +102,7 @@ describe('project LLM config overrides', () => {
 	});
 
 	afterAll(() => {
-		for (const directory of directories) {
+		for (const directory of configDirectories) {
 			fs.rmSync(directory, { force: true, recursive: true });
 		}
 	});
@@ -69,9 +110,9 @@ describe('project LLM config overrides', () => {
 	it('preserves a required API key inherited from nao_config.yaml', async () => {
 		writeConfig(['llm:', '  providers:', '  - provider: openai', '    api_key: sk-from-config']);
 
-		await callUpsert('openai');
+		await upsertLlmConfig('openai');
 
-		expect(testState.upsertProjectLlmConfig).toHaveBeenCalledWith(
+		expect(mocks.upsertProjectLlmConfig).toHaveBeenCalledWith(
 			expect.objectContaining({
 				provider: 'openai',
 				apiKey: 'sk-from-config',
@@ -89,9 +130,9 @@ describe('project LLM config overrides', () => {
 			'    aws_region: us-east-1',
 		]);
 
-		await callUpsert('bedrock');
+		await upsertLlmConfig('bedrock');
 
-		expect(testState.upsertProjectLlmConfig).toHaveBeenCalledWith(
+		expect(mocks.upsertProjectLlmConfig).toHaveBeenCalledWith(
 			expect.objectContaining({
 				provider: 'bedrock',
 				apiKey: '',
@@ -108,25 +149,21 @@ describe('project LLM config overrides', () => {
 function project() {
 	return {
 		id: 'project-id',
+		orgId: 'org-id',
 		name: 'Test project',
-		path: testState.projectPath,
+		path: mocks.projectPath,
 		envVars: {},
 	};
 }
 
 function writeConfig(lines: string[]): void {
 	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-project-llm-override-'));
-	directories.push(directory);
+	configDirectories.push(directory);
 	fs.writeFileSync(path.join(directory, 'nao_config.yaml'), lines.join('\n'));
-	testState.projectPath = directory;
+	mocks.projectPath = directory;
 }
 
-async function callUpsert(provider: 'openai' | 'bedrock'): Promise<void> {
-	const caller = testRouter.createCaller({
-		session: { user: { id: 'user-id' } },
-		selectedProjectId: 'project-id',
-	} as never);
-
+async function upsertLlmConfig(provider: 'openai' | 'bedrock'): Promise<void> {
 	await caller.upsertLlmConfig({
 		provider,
 		enabledModels: [],

@@ -7,17 +7,7 @@ import {
 	PROVIDER_META,
 } from '../../src/agents/provider-meta';
 import type { ParamControl } from '../../src/types/llm';
-
-const BEDROCK_GPT6_IDS = [
-	'global.openai.gpt-6-astra',
-	'global.openai.gpt-6.1-sol',
-	'global.openai.gpt-6-sol',
-	'global.openai.gpt-6-luna',
-	'us.openai.gpt-6-astra',
-	'us.openai.gpt-6.1-sol',
-	'us.openai.gpt-6-sol',
-	'us.openai.gpt-6-luna',
-];
+import { BEDROCK_GPT6_MODEL_IDS } from '../helpers/bedrock-model-ids';
 
 describe('isAnthropicApiModel', () => {
 	it('matches all direct Anthropic models', () => {
@@ -148,7 +138,7 @@ describe('getModelCapabilities', () => {
 });
 
 describe('getModelParameterSpec', () => {
-	it.each(BEDROCK_GPT6_IDS)('omits unsupported sampling controls for %s', (modelId) => {
+	it.each(BEDROCK_GPT6_MODEL_IDS)('omits unsupported sampling controls for %s', (modelId) => {
 		const keys = getModelParameterSpec('bedrock', modelId).map((c) => c.key);
 
 		expect(keys).not.toContain('temperature');

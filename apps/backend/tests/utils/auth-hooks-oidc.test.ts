@@ -3,70 +3,39 @@ import { describe, expect, it } from 'vitest';
 import { isEmailDomainAllowed, resolveProviderId } from '../../src/utils/utils';
 
 describe('OIDC domain allowlist via isEmailDomainAllowed', () => {
-	it('allows when email domain is in the allowlist', () => {
-		expect(isEmailDomainAllowed('user@allowed.com', 'allowed.com,other.com')).toBe(true);
-	});
-
-	it('allows second domain in the allowlist', () => {
-		expect(isEmailDomainAllowed('user@other.com', 'allowed.com,other.com')).toBe(true);
-	});
-
-	it('rejects when email domain is not in the allowlist', () => {
-		expect(isEmailDomainAllowed('user@blocked.com', 'allowed.com,other.com')).toBe(false);
-	});
-
-	it('allows any domain when no allowlist is configured (empty string)', () => {
-		expect(isEmailDomainAllowed('user@anything.com', '')).toBe(true);
-	});
-
-	it('allows any domain when no allowlist is configured (undefined)', () => {
-		expect(isEmailDomainAllowed('user@anything.com', undefined)).toBe(true);
+	it.each([
+		['allows when email domain is in the allowlist', 'user@allowed.com', 'allowed.com,other.com', true],
+		['allows second domain in the allowlist', 'user@other.com', 'allowed.com,other.com', true],
+		['rejects when email domain is not in the allowlist', 'user@blocked.com', 'allowed.com,other.com', false],
+		['allows any domain when no allowlist is configured (empty string)', 'user@anything.com', '', true],
+		['allows any domain when no allowlist is configured (undefined)', 'user@anything.com', undefined, true],
+		['trims whitespace in allowlist entries', 'user@allowed.com', ' allowed.com , other.com ', true],
+		['rejects malformed email without @ symbol', 'noemail', 'allowed.com', false],
+		['rejects email with empty domain part', 'user@', 'allowed.com', false],
+		['does not match subdomains', 'user@sub.allowed.com', 'allowed.com', false],
+	])('%s', (_name, email, allowlist, expected) => {
+		expect(isEmailDomainAllowed(email, allowlist)).toBe(expected);
 	});
 
 	it('is case-insensitive on domain comparison', () => {
 		expect(isEmailDomainAllowed('user@ALLOWED.COM', 'allowed.com')).toBe(true);
 		expect(isEmailDomainAllowed('user@allowed.com', 'ALLOWED.COM')).toBe(true);
 	});
-
-	it('trims whitespace in allowlist entries', () => {
-		expect(isEmailDomainAllowed('user@allowed.com', ' allowed.com , other.com ')).toBe(true);
-	});
-
-	it('rejects malformed email without @ symbol', () => {
-		expect(isEmailDomainAllowed('noemail', 'allowed.com')).toBe(false);
-	});
-
-	it('rejects email with empty domain part', () => {
-		expect(isEmailDomainAllowed('user@', 'allowed.com')).toBe(false);
-	});
-
-	it('does not match subdomains', () => {
-		expect(isEmailDomainAllowed('user@sub.allowed.com', 'allowed.com')).toBe(false);
-	});
 });
 
 describe('resolveProviderId', () => {
-	it('returns params.id for social providers', () => {
-		expect(resolveProviderId({ params: { id: 'google' } })).toBe('google');
-	});
-
-	it('returns params.providerId for genericOAuth (OIDC)', () => {
-		expect(resolveProviderId({ params: { providerId: 'okta' } })).toBe('okta');
-	});
-
-	it('prefers params.id over params.providerId when both are present', () => {
-		expect(resolveProviderId({ params: { id: 'github', providerId: 'okta' } })).toBe('github');
-	});
-
-	it('returns undefined when ctx is undefined', () => {
-		expect(resolveProviderId(undefined)).toBeUndefined();
-	});
-
-	it('returns undefined when ctx is null', () => {
-		expect(resolveProviderId(null)).toBeUndefined();
-	});
-
-	it('returns undefined when params is empty', () => {
-		expect(resolveProviderId({ params: {} })).toBeUndefined();
+	it.each([
+		['returns params.id for social providers', { params: { id: 'google' } }, 'google'],
+		['returns params.providerId for genericOAuth (OIDC)', { params: { providerId: 'okta' } }, 'okta'],
+		[
+			'prefers params.id over params.providerId when both are present',
+			{ params: { id: 'github', providerId: 'okta' } },
+			'github',
+		],
+		['returns undefined when ctx is undefined', undefined, undefined],
+		['returns undefined when ctx is null', null, undefined],
+		['returns undefined when params is empty', { params: {} }, undefined],
+	])('%s', (_name, ctx, expected) => {
+		expect(resolveProviderId(ctx)).toBe(expected);
 	});
 });

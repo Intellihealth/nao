@@ -7,7 +7,7 @@ import storyTool from '../../src/agents/tools/story';
 import s from '../../src/db/abstractSchema';
 import { db } from '../../src/db/db';
 import * as storyFileQueries from '../../src/queries/story-file.queries';
-import type { ToolContext } from '../../src/types/tools';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
 vi.mock('../../src/db/db', async () => {
 	const { createInMemoryDbWithInlineTransactions } = await import('../helpers/in-memory-db');
@@ -69,13 +69,9 @@ describe('publishing a custom story', () => {
 
 function publish() {
 	const tool = storyTool as Tool<{ action: 'publish'; id: string }, { success: boolean }>;
-	return tool.execute!({ action: 'publish', id: 'revenue' }, {
-		experimental_context: {
-			chatId: 'chat-1',
-			userId: 'user-1',
-			projectId: 'project-1',
-			userGroupFeatures: ['storyCreation', 'customStoryCreation'],
-			generatedArtifacts: { stories: [] },
-		} as unknown as ToolContext,
-	} as Parameters<NonNullable<typeof tool.execute>>[1]);
+	return executeTool(
+		tool,
+		{ action: 'publish', id: 'revenue' },
+		createToolContext({ userGroupFeatures: ['storyCreation', 'customStoryCreation'] }),
+	);
 }

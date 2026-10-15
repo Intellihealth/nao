@@ -35,6 +35,8 @@ vi.mock('../../src/utils/logger', () => ({
 
 import { stripeWebhookRoutes } from '../../src/routes/stripe-webhook';
 
+const SIGNED_REQUEST = { headers: { 'stripe-signature': 'valid' }, rawBody: '{}' };
+
 describe('Stripe webhook route', () => {
 	beforeEach(async () => {
 		vi.resetAllMocks();
@@ -81,7 +83,7 @@ describe('Stripe webhook route', () => {
 			data: { object: { id: 'cs_mismatch' } },
 		});
 
-		const response = await handler()({ headers: { 'stripe-signature': 'valid' }, rawBody: '{}' }, reply());
+		const response = await handler()(SIGNED_REQUEST, reply());
 
 		expect(response.statusCode).toBe(400);
 		expect(response.body).toEqual({ error: 'Stripe event mode does not match the configured Stripe key' });
@@ -98,7 +100,7 @@ describe('Stripe webhook route', () => {
 		});
 		testMocks.insertEvent.mockResolvedValue(null);
 
-		const response = await handler()({ headers: { 'stripe-signature': 'valid' }, rawBody: '{}' }, reply());
+		const response = await handler()(SIGNED_REQUEST, reply());
 
 		expect(testMocks.insertEvent).toHaveBeenCalledWith({
 			id: 'evt_123',

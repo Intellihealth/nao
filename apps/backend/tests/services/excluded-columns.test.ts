@@ -26,11 +26,11 @@ const cases = [
 	{ licensed: true, setting: true, expected: true },
 ] as const;
 
-describe('resolveExcludedColumnEnforcement', () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-	});
+beforeEach(() => {
+	vi.clearAllMocks();
+});
 
+describe('resolveExcludedColumnEnforcement', () => {
 	it.each(cases)(
 		'returns $expected when licensed=$licensed and setting=$setting',
 		async ({ licensed, setting, expected }) => {
@@ -43,10 +43,6 @@ describe('resolveExcludedColumnEnforcement', () => {
 });
 
 describe('resolveExcludedColumnEnforcementForProject', () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-	});
-
 	it.each([
 		{ licensed: true, setting: undefined, expected: true },
 		{ licensed: true, setting: false, expected: false },

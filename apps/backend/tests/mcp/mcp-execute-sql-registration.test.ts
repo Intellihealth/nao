@@ -32,6 +32,7 @@ vi.mock('../../src/queries/mcp-query-data.queries', () => ({
 
 import { registerContextLayerTools } from '../../src/mcp/tools/context-layer';
 import type { ConfiguredDatabase } from '../../src/utils/nao-config';
+import { createMcpContext } from '../helpers/fake-mcp-server';
 
 const connections: Array<{ client: Client; server: McpServer }> = [];
 
@@ -180,20 +181,7 @@ describe('MCP execute_sql database selection', () => {
 
 async function connect(configuredDatabases: ConfiguredDatabase[]): Promise<Client> {
 	const server = new McpServer({ name: 'test', version: '0.0.0' });
-	registerContextLayerTools(
-		server,
-		{
-			userId: 'user-1',
-			projectId: 'project-1',
-			settings: {
-				enabled: true,
-				subAgentModeEnabled: false,
-				contextLayerModeEnabled: true,
-			},
-			chartDataMode: false,
-		},
-		configuredDatabases,
-	);
+	registerContextLayerTools(server, createMcpContext(), configuredDatabases);
 	const client = new Client({ name: 'test-client', version: '0.0.0' });
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

@@ -1,8 +1,7 @@
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Query results come from the run's in-memory cache here; the chat history behind it needs a database.
 vi.mock('../../src/queries/chat.queries', () => ({
@@ -14,43 +13,29 @@ import type { executeSql } from '@nao/shared/tools';
 import { __reloadEnvForTesting } from '../../src/env';
 import type { LocalQueryOutcome } from '../../src/services/local-query.service';
 import { runQueryOnLocalFiles } from '../../src/services/local-query.service';
-import { __resetStorageForTesting } from '../../src/services/storage';
 import { statUserFile, writeUserFile } from '../../src/services/storage/user-files';
 import type { QueryResult, ToolContext } from '../../src/types/tools';
+import { otherUserScope, userScope, useTemporaryLocalStorage } from '../helpers/storage-backend';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
 
-const scope = { projectId: 'proj-1', userId: 'user-1' };
+const PERMISSION_DENIED = /file system operations are disabled|Permission Error/;
+const CUSTOMERS_PREVIEW = 'databases/type=postgres/database=analytics/schema=public/table=customers/preview.md';
 
-let storageRoot: string;
+const getStorageRoot = useTemporaryLocalStorage();
+const createTemporaryFolder = useTemporaryFolders();
+
 let projectFolder: string;
 let outsideDir: string;
-let originalEnv: typeof process.env;
 
 beforeEach(async () => {
-	originalEnv = { ...process.env };
-	storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nao-local-query-storage-'));
-	projectFolder = await fs.mkdtemp(path.join(os.tmpdir(), 'nao-local-query-project-'));
-	outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nao-local-query-secret-'));
-
+	projectFolder = createTemporaryFolder('nao-local-query-project-');
+	outsideDir = createTemporaryFolder('nao-local-query-secret-');
 	await fs.writeFile(path.join(outsideDir, 'secrets.csv'), 'token\nsk-live-42\n');
-
-	process.env.NAO_STORAGE_BACKEND = 'local';
-	process.env.NAO_STORAGE_LOCAL_PATH = storageRoot;
-	__reloadEnvForTesting();
-	__resetStorageForTesting();
-});
-
-afterEach(async () => {
-	process.env = originalEnv;
-	__reloadEnvForTesting();
-	__resetStorageForTesting();
-	await Promise.all(
-		[storageRoot, projectFolder, outsideDir].map((dir) => fs.rm(dir, { recursive: true, force: true })),
-	);
 });
 
 describe('querying saved files', () => {
 	it('reads a CSV addressed by its /home path', async () => {
-		await writeUserFile(scope, 'uploads/sales.csv', 'region,amount\nEU,10\nUS,32\n');
+		await writeUserFile(userScope, 'uploads/sales.csv', 'region,amount\nEU,10\nUS,32\n');
 
 		const result = await run("SELECT region, amount FROM read_csv('/home/uploads/sales.csv') ORDER BY region");
 
@@ -62,8 +47,8 @@ describe('querying saved files', () => {
 	});
 
 	it('translates each user to their own space, so the same path means different files', async () => {
-		await writeUserFile(scope, 'notes.csv', 'owner\nuser-1\n');
-		await writeUserFile({ ...scope, userId: 'user-2' }, 'notes.csv', 'owner\nuser-2\n');
+		await writeUserFile(userScope, 'notes.csv', 'owner\nuser-1\n');
+		await writeUserFile(otherUserScope, 'notes.csv', 'owner\nuser-2\n');
 
 		const asUserOne = await run("SELECT owner FROM read_csv('/home/notes.csv')");
 		const asUserTwo = await run("SELECT owner FROM read_csv('/home/notes.csv')", { userId: 'user-2' });
@@ -79,15 +64,15 @@ describe('querying saved files', () => {
 	});
 
 	it('reads a file in the project folder too', async () => {
-		await fs.writeFile(path.join(projectFolder, 'targets.csv'), 'region,target\nEU,100\n');
+		const targetsFile = await writeProjectFile('targets.csv', 'region,target\nEU,100\n');
 
-		const result = await run(`SELECT target FROM read_csv('${path.join(projectFolder, 'targets.csv')}')`);
+		const result = await run(`SELECT target FROM read_csv('${targetsFile}')`);
 
 		expect(result.data).toEqual([{ target: 100 }]);
 	});
 
 	it('reads an allowed project file from a computed path', async () => {
-		await fs.writeFile(path.join(projectFolder, 'targets.csv'), 'region,target\nEU,100\n');
+		await writeProjectFile('targets.csv', 'region,target\nEU,100\n');
 
 		const result = await run(`SELECT target FROM read_csv(concat('${projectFolder}/', 'targets.csv'))`);
 
@@ -98,7 +83,7 @@ describe('querying saved files', () => {
 describe('project file discovery', () => {
 	it('does not touch the project tree for non-file and storage-only queries', async () => {
 		const invalidProjectFolder = `${projectFolder}\0invalid`;
-		await writeUserFile(scope, 'only-storage.csv', 'value\n7\n');
+		await writeUserFile(userScope, 'only-storage.csv', 'value\n7\n');
 
 		expect((await run('SELECT 1 AS value', { projectFolder: invalidProjectFolder })).data).toEqual([{ value: 1 }]);
 		expect(
@@ -114,15 +99,12 @@ describe('project file discovery', () => {
 			run(`SELECT * FROM read_csv(concat('${missingProjectFolder}/', 'missing.csv'))`, {
 				projectFolder: missingProjectFolder,
 			}),
-		).rejects.toThrow(/file system operations are disabled|Permission Error/);
+		).rejects.toThrow(PERMISSION_DENIED);
 	});
 
 	it('skips an unreadable subtree while collecting allowed files', async () => {
-		const readableFile = path.join(projectFolder, 'readable.csv');
-		const unreadableDirectory = path.join(projectFolder, 'unreadable');
-		await fs.writeFile(readableFile, 'value\n9\n');
-		await fs.mkdir(unreadableDirectory);
-		await fs.writeFile(path.join(unreadableDirectory, 'private.csv'), 'value\n10\n');
+		await writeProjectFile('readable.csv', 'value\n9\n');
+		const unreadableDirectory = path.dirname(await writeProjectFile('unreadable/private.csv', 'value\n10\n'));
 		await fs.chmod(unreadableDirectory, 0);
 
 		try {
@@ -145,7 +127,7 @@ describe('joining files against earlier results', () => {
 	});
 
 	it('joins a saved file to a warehouse result', async () => {
-		await writeUserFile(scope, 'budget.csv', 'region,budget\nEU,100\nUS,200\n');
+		await writeUserFile(userScope, 'budget.csv', 'region,budget\nEU,100\nUS,200\n');
 
 		const result = await run(
 			`SELECT b.region, b.budget - a.actual AS variance
@@ -178,21 +160,19 @@ describe('joining files against earlier results', () => {
 describe('what the query cannot reach', () => {
 	it('refuses a file outside the project folder and the user space', async () => {
 		await expect(run(`SELECT * FROM read_csv('${path.join(outsideDir, 'secrets.csv')}')`)).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
+			PERMISSION_DENIED,
 		);
 	});
 
 	it('refuses the files of another user, even by their real path', async () => {
-		await writeUserFile({ ...scope, userId: 'user-2' }, 'private.csv', 'secret\nnope\n');
-		const theirFile = path.join(storageRoot, 'projects/proj-1/users/user-2/private.csv');
+		await writeUserFile(otherUserScope, 'private.csv', 'secret\nnope\n');
+		const theirFile = path.join(getStorageRoot(), 'projects/proj-1/users/user-2/private.csv');
 
-		await expect(run(`SELECT * FROM read_csv('${theirFile}')`)).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
-		);
+		await expect(run(`SELECT * FROM read_csv('${theirFile}')`)).rejects.toThrow(PERMISSION_DENIED);
 	});
 
 	it('refuses to escape the user space by traversal', async () => {
-		await writeUserFile(scope, 'uploads/sales.csv', 'region\nEU\n');
+		await writeUserFile(userScope, 'uploads/sales.csv', 'region\nEU\n');
 
 		await expect(run("SELECT * FROM read_csv('/home/../user-2/private.csv')")).rejects.toThrow();
 	});
@@ -215,7 +195,7 @@ describe('what the query cannot reach', () => {
 	});
 
 	it('refuses SQL that writes a file itself, even though save_to can', async () => {
-		await writeUserFile(scope, 'sales.csv', 'region\nEU\n');
+		await writeUserFile(userScope, 'sales.csv', 'region\nEU\n');
 
 		await expect(
 			run(`COPY (SELECT * FROM read_csv('/home/sales.csv')) TO '${path.join(outsideDir, 'leak.csv')}'`),
@@ -229,48 +209,27 @@ describe('what the query cannot reach', () => {
 
 describe('project context permissions', () => {
 	it('refuses denied docs and database previews', async () => {
-		const deniedDoc = path.join(projectFolder, 'docs', 'private.md');
-		const deniedPreview = path.join(
-			projectFolder,
-			'databases/type=postgres/database=analytics/schema=public/table=customers/preview.md',
-		);
-		await fs.mkdir(path.dirname(deniedDoc), { recursive: true });
-		await fs.mkdir(path.dirname(deniedPreview), { recursive: true });
-		await fs.writeFile(deniedDoc, 'private plans');
-		await fs.writeFile(deniedPreview, 'private customer row');
+		const deniedDoc = await writeProjectFile('docs/private.md', 'private plans');
+		const deniedPreview = await writeProjectFile(CUSTOMERS_PREVIEW, 'private customer row');
 
 		await expect(run(`SELECT content FROM read_text('${deniedDoc}')`, denyAllContext())).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
+			PERMISSION_DENIED,
 		);
 		await expect(run(`SELECT content FROM read_text('${deniedPreview}')`, denyAllContext())).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
+			PERMISSION_DENIED,
 		);
 	});
 
 	it('enforces partial docs, warehouse, and project file grants while keeping granted files readable', async () => {
-		const grantedDoc = path.join(projectFolder, 'docs', 'finance', 'targets.csv');
-		const grantedPreview = path.join(
-			projectFolder,
+		const grantedDoc = await writeProjectFile('docs/finance/targets.csv', 'target\n100\n');
+		const grantedPreview = await writeProjectFile(
 			'databases/type=postgres/database=analytics/schema=public/table=orders/preview.md',
+			'allowed order row',
 		);
-		const deniedDoc = path.join(projectFolder, 'docs', 'private', 'plans.md');
-		const deniedPreview = path.join(
-			projectFolder,
-			'databases/type=postgres/database=analytics/schema=public/table=customers/preview.md',
-		);
-		const ordinaryFile = path.join(projectFolder, 'notes.txt');
-		const deniedProjectFile = path.join(projectFolder, 'seeds', 'salaries.csv');
-		await fs.mkdir(path.dirname(grantedDoc), { recursive: true });
-		await fs.mkdir(path.dirname(grantedPreview), { recursive: true });
-		await fs.mkdir(path.dirname(deniedDoc), { recursive: true });
-		await fs.mkdir(path.dirname(deniedPreview), { recursive: true });
-		await fs.mkdir(path.dirname(deniedProjectFile), { recursive: true });
-		await fs.writeFile(grantedDoc, 'target\n100\n');
-		await fs.writeFile(grantedPreview, 'allowed order row');
-		await fs.writeFile(deniedDoc, 'private plans');
-		await fs.writeFile(deniedPreview, 'private customer row');
-		await fs.writeFile(ordinaryFile, 'visible');
-		await fs.writeFile(deniedProjectFile, 'name,salary\n');
+		const deniedDoc = await writeProjectFile('docs/private/plans.md', 'private plans');
+		const deniedPreview = await writeProjectFile(CUSTOMERS_PREVIEW, 'private customer row');
+		const ordinaryFile = await writeProjectFile('notes.txt', 'visible');
+		const deniedProjectFile = await writeProjectFile('seeds/salaries.csv', 'name,salary\n');
 
 		const access = {
 			...denyAllContext(),
@@ -309,29 +268,24 @@ describe('project context permissions', () => {
 		expect((await run(`SELECT content FROM read_text('${ordinaryFile}')`, access)).data).toEqual([
 			{ content: 'visible' },
 		]);
-		await expect(run(`SELECT content FROM read_text('${deniedDoc}')`, access)).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
-		);
+		await expect(run(`SELECT content FROM read_text('${deniedDoc}')`, access)).rejects.toThrow(PERMISSION_DENIED);
 		await expect(run(`SELECT content FROM read_text('${deniedPreview}')`, access)).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
+			PERMISSION_DENIED,
 		);
 		await expect(run(`SELECT name FROM read_csv('${deniedProjectFile}')`, access)).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
+			PERMISSION_DENIED,
 		);
 	});
 
 	it('does not let globs or computed paths recover denied files', async () => {
-		const deniedDirectory = path.join(projectFolder, 'docs', 'private');
-		const deniedDoc = path.join(deniedDirectory, 'plans.md');
-		await fs.mkdir(deniedDirectory, { recursive: true });
-		await fs.writeFile(deniedDoc, 'private plans');
+		const deniedDirectory = path.dirname(await writeProjectFile('docs/private/plans.md', 'private plans'));
 
 		await expect(run(`SELECT content FROM read_text('${deniedDirectory}/*.md')`, denyAllContext())).rejects.toThrow(
-			/file system operations are disabled|Permission Error/,
+			PERMISSION_DENIED,
 		);
 		await expect(
 			run(`SELECT content FROM read_text(concat('${deniedDirectory}/', 'plans.md'))`, denyAllContext()),
-		).rejects.toThrow(/file system operations are disabled|Permission Error/);
+		).rejects.toThrow(PERMISSION_DENIED);
 	});
 });
 
@@ -344,7 +298,7 @@ describe('saving the result', () => {
 		expect(result.data).toEqual([{ region: 'EU', amount: 10 }]);
 		expect(savedFile?.path).toBe('/home/exports/revenue.csv');
 		expect(savedFile?.size).toBeGreaterThan(0);
-		expect(await statUserFile(scope, 'exports/revenue.csv')).not.toBeNull();
+		expect(await statUserFile(userScope, 'exports/revenue.csv')).not.toBeNull();
 	});
 
 	it('writes a Parquet the next query can read straight back', async () => {
@@ -358,7 +312,7 @@ describe('saving the result', () => {
 	});
 
 	it('saves the rows a query over a file produced', async () => {
-		await writeUserFile(scope, 'sales.csv', 'region,amount\nEU,10\nEU,5\nUS,32\n');
+		await writeUserFile(userScope, 'sales.csv', 'region,amount\nEU,10\nEU,5\nUS,32\n');
 
 		const { savedFile } = await runOutcome(
 			"SELECT region, SUM(amount) AS total FROM read_csv('/home/sales.csv') GROUP BY region ORDER BY region",
@@ -373,7 +327,7 @@ describe('saving the result', () => {
 	});
 
 	it('saves a query result joined to a file, CTEs and all', async () => {
-		await writeUserFile(scope, 'budget.csv', 'region,budget\nEU,100\n');
+		await writeUserFile(userScope, 'budget.csv', 'region,budget\nEU,100\n');
 
 		const { savedFile } = await runOutcome(
 			`WITH actuals AS (SELECT * FROM query_ff00)
@@ -429,7 +383,7 @@ describe('saving the result', () => {
 			runOutcome('SELECT * FROM nope', { saveTo: { path: '/home/exports/never.csv', format: 'csv' } }),
 		).rejects.toThrow();
 
-		expect(await statUserFile(scope, 'exports/never.csv')).toBeNull();
+		expect(await statUserFile(userScope, 'exports/never.csv')).toBeNull();
 	});
 
 	it('refuses a result above the storage size limit', async () => {
@@ -442,7 +396,7 @@ describe('saving the result', () => {
 			}),
 		).rejects.toThrow('File too large');
 
-		expect(await statUserFile(scope, 'exports/big.csv')).toBeNull();
+		expect(await statUserFile(userScope, 'exports/big.csv')).toBeNull();
 	});
 });
 
@@ -452,8 +406,8 @@ const run = async (sql: string, overrides: RunOverrides = {}): Promise<QueryResu
 
 const runOutcome = async (sql: string, overrides: RunOverrides = {}): Promise<LocalQueryOutcome> => {
 	const context = {
-		projectId: scope.projectId,
-		userId: overrides.userId ?? scope.userId,
+		projectId: userScope.projectId,
+		userId: overrides.userId ?? userScope.userId,
 		projectFolder: overrides.projectFolder ?? projectFolder,
 		chatId: 'chat-1',
 		queryResults: new Map(overrides.queryResults ?? []),
@@ -481,4 +435,11 @@ function denyAllContext(): Pick<RunOverrides, 'warehouseTableAccess' | 'docsCont
 		docsContextAccess: { enforced: true, access: { mode: 'restricted', grants: [] } },
 		filesContextAccess: { enforced: false },
 	};
+}
+
+async function writeProjectFile(relativePath: string, content: string): Promise<string> {
+	const filePath = path.join(projectFolder, relativePath);
+	await fs.mkdir(path.dirname(filePath), { recursive: true });
+	await fs.writeFile(filePath, content);
+	return filePath;
 }

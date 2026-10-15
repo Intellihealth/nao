@@ -85,11 +85,16 @@ describe('context branch cleanup', () => {
 		vi.clearAllMocks();
 	});
 
-	it('deletes a branch merged more than 24 hours ago and releases ownership', async () => {
+	function setUpOwnedBranch(branch: string, { push = true, checkedOut = false } = {}): string {
 		const fixture = createFixture(temporaryRoots);
-		const branch = 'nao/context-edits-old';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: true, checkedOut: false });
+		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push, checkedOut });
 		configureProject(fixture, [ownership(branch)]);
+		return worktree;
+	}
+
+	it('deletes a branch merged more than 24 hours ago and releases ownership', async () => {
+		const branch = 'nao/context-edits-old';
+		const worktree = setUpOwnedBranch(branch);
 
 		await runContextBranchCleanup();
 
@@ -98,10 +103,8 @@ describe('context branch cleanup', () => {
 	});
 
 	it('keeps a branch merged less than 24 hours ago', async () => {
-		const fixture = createFixture(temporaryRoots);
 		const branch = 'nao/context-edits-recent';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: true, checkedOut: false });
-		configureProject(fixture, [ownership(branch)]);
+		const worktree = setUpOwnedBranch(branch);
 		providerMocks.findReviewRequestByBranch.mockResolvedValue(mergedReviewRequest(RECENT_COMPLETION));
 
 		await runContextBranchCleanup();
@@ -111,10 +114,8 @@ describe('context branch cleanup', () => {
 	});
 
 	it('keeps a branch while its review request is open', async () => {
-		const fixture = createFixture(temporaryRoots);
 		const branch = 'nao/context-edits-open';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: true, checkedOut: false });
-		configureProject(fixture, [ownership(branch)]);
+		const worktree = setUpOwnedBranch(branch);
 		providerMocks.findReviewRequestByBranch.mockResolvedValue({
 			url: 'https://github.com/nao/context/pull/1',
 			state: 'open',
@@ -129,10 +130,8 @@ describe('context branch cleanup', () => {
 	});
 
 	it('keeps a branch when no review request is found', async () => {
-		const fixture = createFixture(temporaryRoots);
 		const branch = 'nao/context-edits-no-pr';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: true, checkedOut: false });
-		configureProject(fixture, [ownership(branch)]);
+		const worktree = setUpOwnedBranch(branch);
 		providerMocks.findReviewRequestByBranch.mockResolvedValue(null);
 
 		await runContextBranchCleanup();
@@ -142,10 +141,8 @@ describe('context branch cleanup', () => {
 	});
 
 	it('keeps a branch when its owner has no provider token', async () => {
-		const fixture = createFixture(temporaryRoots);
 		const branch = 'nao/context-edits-no-token';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: true, checkedOut: false });
-		configureProject(fixture, [ownership(branch)]);
+		const worktree = setUpOwnedBranch(branch);
 		providerMocks.getToken.mockResolvedValue(null);
 
 		await runContextBranchCleanup();
@@ -156,10 +153,8 @@ describe('context branch cleanup', () => {
 	});
 
 	it('keeps a branch with a commit absent from origin and the default branch', async () => {
-		const fixture = createFixture(temporaryRoots);
 		const branch = 'nao/context-edits-unpublished';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: false, checkedOut: false });
-		configureProject(fixture, [ownership(branch)]);
+		const worktree = setUpOwnedBranch(branch, { push: false });
 
 		await runContextBranchCleanup();
 
@@ -168,11 +163,9 @@ describe('context branch cleanup', () => {
 	});
 
 	it('keeps a branch when the worktree has uncommitted changes', async () => {
-		const fixture = createFixture(temporaryRoots);
 		const branch = 'nao/context-edits-dirty';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: true, checkedOut: false });
+		const worktree = setUpOwnedBranch(branch);
 		fs.writeFileSync(path.join(worktree, 'uncommitted.md'), 'keep me\n');
-		configureProject(fixture, [ownership(branch)]);
 
 		await runContextBranchCleanup();
 
@@ -206,10 +199,8 @@ describe('context branch cleanup', () => {
 	});
 
 	it('switches off a checked-out branch before deleting it', async () => {
-		const fixture = createFixture(temporaryRoots);
 		const branch = 'nao/context-edits-checked-out';
-		const worktree = createOwnedBranch(fixture, 'user-1', branch, { push: true, checkedOut: true });
-		configureProject(fixture, [ownership(branch)]);
+		const worktree = setUpOwnedBranch(branch, { checkedOut: true });
 
 		await runContextBranchCleanup();
 

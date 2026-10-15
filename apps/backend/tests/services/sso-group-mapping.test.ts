@@ -77,6 +77,12 @@ import {
 } from '../../src/utils/sso-group-mapping';
 import { hasSsoSessionExceededMaxAge } from '../../src/utils/sso-session';
 
+const MICROSOFT_ENV = {
+	AZURE_AD_CLIENT_ID: 'client-id',
+	AZURE_AD_CLIENT_SECRET: 'client-secret',
+	AZURE_AD_TENANT_ID: 'tenant-id',
+};
+
 beforeEach(() => {
 	for (const key of Object.keys(mocks.env)) {
 		delete mocks.env[key];
@@ -139,10 +145,7 @@ describe('isOrganizationRoleMappingActive', () => {
 
 	it('returns true for a licensed configured Microsoft Entra role mapping', async () => {
 		delete mocks.env.OIDC_GROUP_NAO_ROLE_MAPPING;
-		Object.assign(mocks.env, {
-			AZURE_AD_CLIENT_ID: 'client-id',
-			AZURE_AD_CLIENT_SECRET: 'client-secret',
-			AZURE_AD_TENANT_ID: 'tenant-id',
+		Object.assign(mocks.env, MICROSOFT_ENV, {
 			AZURE_AD_GROUP_NAO_ROLE_MAPPING: 'a0b1c2d3-e4f5-6789-abcd-ef0123456789:admin',
 		});
 
@@ -200,10 +203,7 @@ describe('syncOrganizationRoleFromSsoGroups', () => {
 
 describe('syncOrganizationRoleFromMicrosoftGroups', () => {
 	beforeEach(() => {
-		Object.assign(mocks.env, {
-			AZURE_AD_CLIENT_ID: 'client-id',
-			AZURE_AD_CLIENT_SECRET: 'client-secret',
-			AZURE_AD_TENANT_ID: 'tenant-id',
+		Object.assign(mocks.env, MICROSOFT_ENV, {
 			AZURE_AD_GROUP_NAO_ROLE_MAPPING:
 				'a0b1c2d3-e4f5-6789-abcd-ef0123456789:viewer,11111111-2222-3333-4444-555555555555:admin',
 		});

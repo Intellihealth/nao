@@ -40,8 +40,7 @@ describe('runSqlOverQueryResults', () => {
 	});
 
 	it('keeps column types so numeric aggregations work', async () => {
-		const result = await runSqlOverQueryResults(
-			new Map([['query_orders', orders]]),
+		const result = await runSqlOverOrders(
 			'SELECT COUNT(*) AS rows_count, MAX(total_amount) AS biggest FROM query_orders',
 		);
 
@@ -65,9 +64,7 @@ describe('runSqlOverQueryResults', () => {
 	});
 
 	it('surfaces invalid SQL as an error', async () => {
-		await expect(
-			runSqlOverQueryResults(new Map([['query_orders', orders]]), 'SELECT missing FROM query_orders'),
-		).rejects.toThrow(/missing/);
+		await expect(runSqlOverOrders('SELECT missing FROM query_orders')).rejects.toThrow(/missing/);
 	});
 
 	it('still exposes tables when the query id contains path separators', async () => {
@@ -81,48 +78,37 @@ describe('runSqlOverQueryResults', () => {
 	});
 
 	it('rejects write statements before execution', async () => {
-		await expect(
-			runSqlOverQueryResults(new Map([['query_orders', orders]]), 'DELETE FROM query_orders'),
-		).rejects.toThrow(/read-only/i);
+		await expect(runSqlOverOrders('DELETE FROM query_orders')).rejects.toThrow(/read-only/i);
 	});
 
 	it('rejects references to tables outside the allowlist', async () => {
-		await expect(
-			runSqlOverQueryResults(new Map([['query_orders', orders]]), 'SELECT * FROM query_customers'),
-		).rejects.toThrow(/allowlist/i);
+		await expect(runSqlOverOrders('SELECT * FROM query_customers')).rejects.toThrow(/allowlist/i);
 	});
 
 	it('accepts DuckDB-specific syntax such as TRY_CAST', async () => {
-		const result = await runSqlOverQueryResults(
-			new Map([['query_orders', orders]]),
-			'SELECT SUM(TRY_CAST(customer_id AS BIGINT)) AS total FROM query_orders',
-		);
+		const result = await runSqlOverOrders('SELECT SUM(TRY_CAST(customer_id AS BIGINT)) AS total FROM query_orders');
 
 		expect(result.data).toEqual([{ total: 105 }]);
 	});
 
 	it('accepts DuckDB-specific syntax such as QUALIFY', async () => {
-		const result = await runSqlOverQueryResults(
-			new Map([['query_orders', orders]]),
-			`SELECT customer_id, SUM(total_amount) AS revenue FROM query_orders GROUP BY customer_id
-			 QUALIFY ROW_NUMBER() OVER (ORDER BY revenue DESC) = 1`,
-		);
+		const sql = `SELECT customer_id, SUM(total_amount) AS revenue FROM query_orders GROUP BY customer_id
+			 QUALIFY ROW_NUMBER() OVER (ORDER BY revenue DESC) = 1`;
+		const result = await runSqlOverOrders(sql);
 
 		expect(result.data).toEqual([{ customer_id: 51, revenue: 100 }]);
 	});
 
 	it('rejects unparseable SQL, naming DuckDB and the parser error', async () => {
-		await expect(
-			runSqlOverQueryResults(new Map([['query_orders', orders]]), 'SELECT FROM WHERE )('),
-		).rejects.toThrow(/Could not parse the query as DuckDB.*syntax error/s);
+		await expect(runSqlOverOrders('SELECT FROM WHERE )(')).rejects.toThrow(
+			/Could not parse the query as DuckDB.*syntax error/s,
+		);
 	});
 
 	it('allows CTEs that only read allowlisted tables', async () => {
-		const result = await runSqlOverQueryResults(
-			new Map([['query_orders', orders]]),
-			`WITH totals AS (SELECT customer_id, SUM(total_amount) AS revenue FROM query_orders GROUP BY 1)
-			 SELECT * FROM totals ORDER BY revenue DESC`,
-		);
+		const sql = `WITH totals AS (SELECT customer_id, SUM(total_amount) AS revenue FROM query_orders GROUP BY 1)
+			 SELECT * FROM totals ORDER BY revenue DESC`;
+		const result = await runSqlOverOrders(sql);
 
 		expect(result.data).toEqual([
 			{ customer_id: 51, revenue: 100 },
@@ -131,8 +117,10 @@ describe('runSqlOverQueryResults', () => {
 	});
 
 	it('blocks reading local files after tables are loaded', async () => {
-		await expect(
-			runSqlOverQueryResults(new Map([['query_orders', orders]]), `SELECT * FROM read_json_auto('/etc/hosts')`),
-		).rejects.toThrow();
+		await expect(runSqlOverOrders(`SELECT * FROM read_json_auto('/etc/hosts')`)).rejects.toThrow();
 	});
 });
+
+function runSqlOverOrders(sql: string) {
+	return runSqlOverQueryResults(new Map([['query_orders', orders]]), sql);
+}

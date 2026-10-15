@@ -1,18 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { __reloadEnvForTesting, env } from '../../src/env';
+import { restoreProcessEnvAfterEach } from '../helpers/process-env-snapshot';
 
 describe('OIDC_GROUP_NAO_GROUP_MAPPING', () => {
-	let originalEnv: typeof process.env;
-
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-	});
-
-	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
-	});
+	restoreProcessEnvAfterEach({ afterRestore: __reloadEnvForTesting });
 
 	it('accepts valid wildcard and project-specific entries', () => {
 		process.env.OIDC_GROUP_NAO_GROUP_MAPPING = 'finance:*:Analysts,leaders:project-1:Managers';
@@ -30,16 +22,7 @@ describe('OIDC_GROUP_NAO_GROUP_MAPPING', () => {
 });
 
 describe('Microsoft Entra group environment mappings', () => {
-	let originalEnv: typeof process.env;
-
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-	});
-
-	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
-	});
+	restoreProcessEnvAfterEach({ afterRestore: __reloadEnvForTesting });
 
 	it('accepts wildcard, project-specific, and organization-role mappings', () => {
 		process.env.AZURE_AD_GROUP_NAO_GROUP_MAPPING =

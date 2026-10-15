@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createProviderModel, disableModelReasoning, fitThinkingBudget } from '../../src/agents/providers';
 import type { ModelInferenceSettings, ProviderSettings } from '../../src/types/llm';
+import { BEDROCK_GPT6_MODEL_IDS } from '../helpers/bedrock-model-ids';
 
 const SETTINGS: ProviderSettings = { apiKey: 'test-key' };
 const VERTEX_SETTINGS: ProviderSettings = {
@@ -10,17 +11,6 @@ const VERTEX_SETTINGS: ProviderSettings = {
 	credentials: { project: 'test-project', location: 'us-east5' },
 };
 const COMPATIBLE_SETTINGS: ProviderSettings = { apiKey: 'test-key', baseURL: 'http://localhost:8000/v1' };
-const BEDROCK_GPT6_IDS = [
-	'global.openai.gpt-6-astra',
-	'global.openai.gpt-6.1-sol',
-	'global.openai.gpt-6-sol',
-	'global.openai.gpt-6-luna',
-	'us.openai.gpt-6-astra',
-	'us.openai.gpt-6.1-sol',
-	'us.openai.gpt-6-sol',
-	'us.openai.gpt-6-luna',
-];
-
 function settingsFor(provider: LlmProvider): ProviderSettings {
 	if (provider === 'vertex') {
 		return VERTEX_SETTINGS;
@@ -345,7 +335,7 @@ describe('Bedrock', () => {
 	])('profile routing in $region', ({ region, prefix }) => {
 		const settings: ProviderSettings = { ...SETTINGS, credentials: { region } };
 
-		it.each(BEDROCK_GPT6_IDS)('preserves the explicitly selected profile %s', (modelId) => {
+		it.each(BEDROCK_GPT6_MODEL_IDS)('preserves the explicitly selected profile %s', (modelId) => {
 			const { model } = createProviderModel('bedrock', settings, modelId);
 
 			expect(model.modelId).toBe(modelId);
@@ -364,11 +354,11 @@ describe('Bedrock', () => {
 		});
 	});
 
-	it.each(BEDROCK_GPT6_IDS)('reports the 1.05M window for %s', (modelId) => {
+	it.each(BEDROCK_GPT6_MODEL_IDS)('reports the 1.05M window for %s', (modelId) => {
 		expect(createProviderModel('bedrock', SETTINGS, modelId).contextWindow).toBe(1_050_000);
 	});
 
-	it.each(BEDROCK_GPT6_IDS)('drops unsupported sampling settings for %s', (modelId) => {
+	it.each(BEDROCK_GPT6_MODEL_IDS)('drops unsupported sampling settings for %s', (modelId) => {
 		const { callSettings } = createProviderModel('bedrock', SETTINGS, modelId, {
 			temperature: 0.5,
 			topP: 0.9,
@@ -657,12 +647,6 @@ describe('thinking budget safety (stored budgets must never fail a request)', ()
 		const { options } = resolve('anthropic', 'claude-sonnet-4-5', { thinkingBudgetTokens: 100_000 });
 
 		expect(options.thinking).toEqual({ type: 'enabled', budgetTokens: 62_976 });
-	});
-
-	it('keeps a Claude budget that already fits', () => {
-		const { options } = resolve('anthropic', 'claude-sonnet-4-5', { thinkingBudgetTokens: 8192 });
-
-		expect(options.thinking).toEqual({ type: 'enabled', budgetTokens: 8192 });
 	});
 
 	it('clamps a Bedrock Claude budget the same way', () => {

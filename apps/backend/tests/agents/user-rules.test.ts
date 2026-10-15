@@ -43,6 +43,23 @@ function setupDirStructure(root: string, structure: Record<string, string[]>) {
 	});
 }
 
+function singleTableTree(
+	root: string,
+	type: string,
+	database: string,
+	schema: string,
+	table: string,
+): Record<string, string[]> {
+	const typeDirectory = join(root, 'databases', `type=${type}`);
+	const databaseDirectory = join(typeDirectory, `database=${database}`);
+	return {
+		[join(root, 'databases')]: [`type=${type}`],
+		[typeDirectory]: [`database=${database}`],
+		[databaseDirectory]: [`schema=${schema}`],
+		[join(databaseDirectory, `schema=${schema}`)]: [`table=${table}`],
+	};
+}
+
 describe('getUserRules', () => {
 	it('returns undefined without a project-root RULES.md', () => {
 		mockExistsSync.mockReturnValue(false);
@@ -88,12 +105,7 @@ describe('getDatabaseObjects', () => {
 
 	it('returns parsed database objects from the directory structure', () => {
 		const root = '/project-a';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=snowflake'],
-			[join(root, 'databases', 'type=snowflake')]: ['database=mydb'],
-			[join(root, 'databases', 'type=snowflake', 'database=mydb')]: ['schema=public'],
-			[join(root, 'databases', 'type=snowflake', 'database=mydb', 'schema=public')]: ['table=orders'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'snowflake', 'mydb', 'public', 'orders'));
 
 		const result = getDatabaseObjects(root);
 
@@ -164,12 +176,7 @@ describe('getDatabaseObjects', () => {
 
 	it('returns cached result on subsequent calls with the same folder', () => {
 		const root = '/project-cached';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=db1'],
-			[join(root, 'databases', 'type=postgres', 'database=db1')]: ['schema=s1'],
-			[join(root, 'databases', 'type=postgres', 'database=db1', 'schema=s1')]: ['table=t1'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'db1', 's1', 't1'));
 
 		const first = getDatabaseObjects(root);
 		vi.clearAllMocks();
@@ -188,12 +195,7 @@ describe('getDatabaseObjects', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const root = '/project-expired';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=db1'],
-			[join(root, 'databases', 'type=postgres', 'database=db1')]: ['schema=s1'],
-			[join(root, 'databases', 'type=postgres', 'database=db1', 'schema=s1')]: ['table=t1'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'db1', 's1', 't1'));
 
 		const first = getDatabaseObjects(root);
 		vi.setSystemTime(5 * 60 * 1000);
@@ -205,10 +207,7 @@ describe('getDatabaseObjects', () => {
 		const structure: Record<string, string[]> = {};
 		for (let index = 0; index <= 100; index += 1) {
 			const root = `/project-bounded-${index}`;
-			structure[join(root, 'databases')] = ['type=postgres'];
-			structure[join(root, 'databases', 'type=postgres')] = ['database=db'];
-			structure[join(root, 'databases', 'type=postgres', 'database=db')] = ['schema=public'];
-			structure[join(root, 'databases', 'type=postgres', 'database=db', 'schema=public')] = ['table=users'];
+			Object.assign(structure, singleTableTree(root, 'postgres', 'db', 'public', 'users'));
 		}
 		setupDirStructure('/project-bounded-', structure);
 
@@ -280,10 +279,7 @@ describe('getDatabaseContextCatalog', () => {
 	it('does not re-read the catalog within the cache TTL', () => {
 		const root = '/project-catalog-cached';
 		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=app'],
-			[join(root, 'databases', 'type=postgres', 'database=app')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=app', 'schema=public')]: ['table=users'],
+			...singleTableTree(root, 'postgres', 'app', 'public', 'users'),
 			[join(root, '.meta', 'databases')]: ['type=postgres'],
 			[join(root, '.meta', 'databases', 'type=postgres')]: ['database=app'],
 		});
@@ -349,12 +345,7 @@ describe('getDatabaseContextCatalog', () => {
 
 	it('bypasses and updates the cache for a fresh read', () => {
 		const root = '/project-catalog-fresh';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=app'],
-			[join(root, 'databases', 'type=postgres', 'database=app')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=app', 'schema=public')]: ['table=users'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'app', 'public', 'users'));
 		mockReadFileSync.mockReturnValue('- old_column (INTEGER)\n');
 		expect(getDatabaseContextCatalog(root).objects[0].columns).toEqual(['old_column']);
 
@@ -370,14 +361,8 @@ describe('getDatabaseContextCatalog', () => {
 		const firstRoot = '/project-catalog-keyed/first';
 		const secondRoot = '/project-catalog-keyed/second';
 		setupDirStructure('/project-catalog-keyed', {
-			[join(firstRoot, 'databases')]: ['type=postgres'],
-			[join(firstRoot, 'databases', 'type=postgres')]: ['database=first'],
-			[join(firstRoot, 'databases', 'type=postgres', 'database=first')]: ['schema=public'],
-			[join(firstRoot, 'databases', 'type=postgres', 'database=first', 'schema=public')]: ['table=users'],
-			[join(secondRoot, 'databases')]: ['type=postgres'],
-			[join(secondRoot, 'databases', 'type=postgres')]: ['database=second'],
-			[join(secondRoot, 'databases', 'type=postgres', 'database=second')]: ['schema=public'],
-			[join(secondRoot, 'databases', 'type=postgres', 'database=second', 'schema=public')]: ['table=users'],
+			...singleTableTree(firstRoot, 'postgres', 'first', 'public', 'users'),
+			...singleTableTree(secondRoot, 'postgres', 'second', 'public', 'users'),
 		});
 		mockReadFileSync.mockReturnValue('- id (INTEGER)\n');
 
@@ -393,12 +378,7 @@ describe('getDatabaseContextCatalog', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const root = '/project-catalog-expired';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=app'],
-			[join(root, 'databases', 'type=postgres', 'database=app')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=app', 'schema=public')]: ['table=users'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'app', 'public', 'users'));
 		mockReadFileSync.mockReturnValue('- id (INTEGER)\n');
 
 		const first = getDatabaseContextCatalog(root);
@@ -412,10 +392,7 @@ describe('getDatabaseContextCatalog', () => {
 		const structure: Record<string, string[]> = {};
 		for (let index = 0; index <= 100; index += 1) {
 			const root = `/project-catalog-bounded-${index}`;
-			structure[join(root, 'databases')] = ['type=postgres'];
-			structure[join(root, 'databases', 'type=postgres')] = ['database=db'];
-			structure[join(root, 'databases', 'type=postgres', 'database=db')] = ['schema=public'];
-			structure[join(root, 'databases', 'type=postgres', 'database=db', 'schema=public')] = ['table=users'];
+			Object.assign(structure, singleTableTree(root, 'postgres', 'db', 'public', 'users'));
 		}
 		setupDirStructure('/project-catalog-bounded-', structure);
 		mockReadFileSync.mockReturnValue('- id (INTEGER)\n');
@@ -434,12 +411,7 @@ describe('getDatabaseContextCatalog', () => {
 
 	it('resets same-root cached content for test isolation', () => {
 		const root = '/project-catalog-isolated';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=app'],
-			[join(root, 'databases', 'type=postgres', 'database=app')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=app', 'schema=public')]: ['table=users'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'app', 'public', 'users'));
 		mockReadFileSync.mockReturnValue('- first_name (TEXT)\n');
 		expect(getDatabaseContextCatalog(root).objects[0].columns).toEqual(['first_name']);
 
@@ -451,12 +423,7 @@ describe('getDatabaseContextCatalog', () => {
 
 	it('parses quoted column names and nested type parentheses', () => {
 		const root = '/project-catalog-identifiers';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=app'],
-			[join(root, 'databases', 'type=postgres', 'database=app')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=app', 'schema=public')]: ['table=regions'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'app', 'public', 'regions'));
 		mockReadFileSync.mockReturnValue(
 			'- `region (code)` (VARCHAR(20))\n- "Case Sensitive" (DECIMAL(10, 2))\n- plain (TEXT)\n',
 		);
@@ -470,12 +437,7 @@ describe('getDatabaseContextCatalog', () => {
 
 	it('ignores quoted parentheses in generated column defaults and descriptions', () => {
 		const root = '/project-catalog-quoted-metadata';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=clickhouse'],
-			[join(root, 'databases', 'type=clickhouse')]: ['database=app'],
-			[join(root, 'databases', 'type=clickhouse', 'database=app')]: ['schema=public'],
-			[join(root, 'databases', 'type=clickhouse', 'database=app', 'schema=public')]: ['table=events'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'clickhouse', 'app', 'public', 'events'));
 		mockReadFileSync.mockReturnValue(
 			[
 				"- single_default (String, DEFAULT 'prefix (')",
@@ -499,12 +461,7 @@ describe('getDatabaseContextCatalog', () => {
 
 	it('parses a generated description ending in a literal backslash', () => {
 		const root = '/project-catalog-trailing-backslash';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=app'],
-			[join(root, 'databases', 'type=postgres', 'database=app')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=app', 'schema=public')]: ['table=files'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'app', 'public', 'files'));
 		mockReadFileSync.mockReturnValue(String.raw`- path (TEXT, "ends with \")`);
 
 		expect(getDatabaseContextCatalog(root).objects[0].columns).toEqual(['path']);
@@ -529,12 +486,7 @@ describe('getTableColumnsContent', () => {
 
 	it('returns the columns file content when the fqdn matches', () => {
 		const root = '/project-cols';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=mydb'],
-			[join(root, 'databases', 'type=postgres', 'database=mydb')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=mydb', 'schema=public')]: ['table=users'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'mydb', 'public', 'users'));
 		mockReadFileSync.mockReturnValue('# id\n# name\n');
 
 		const result = getTableColumnsContent(root, 'mydb.public.users', unrestrictedAccess);
@@ -580,12 +532,7 @@ describe('getTableColumnsContent', () => {
 
 	it('returns undefined when reading the columns file fails', () => {
 		const root = '/project-cols-err';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=mydb'],
-			[join(root, 'databases', 'type=postgres', 'database=mydb')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=mydb', 'schema=public')]: ['table=users'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'mydb', 'public', 'users'));
 		mockReadFileSync.mockImplementation(() => {
 			throw new Error('File not found');
 		});
@@ -597,12 +544,7 @@ describe('getTableColumnsContent', () => {
 
 	it('does not read columns for a denied table', () => {
 		const root = '/project-cols-denied';
-		setupDirStructure(root, {
-			[join(root, 'databases')]: ['type=postgres'],
-			[join(root, 'databases', 'type=postgres')]: ['database=mydb'],
-			[join(root, 'databases', 'type=postgres', 'database=mydb')]: ['schema=public'],
-			[join(root, 'databases', 'type=postgres', 'database=mydb', 'schema=public')]: ['table=users'],
-		});
+		setupDirStructure(root, singleTableTree(root, 'postgres', 'mydb', 'public', 'users'));
 
 		const result = getTableColumnsContent(root, 'mydb.public.users', {
 			enforced: true,

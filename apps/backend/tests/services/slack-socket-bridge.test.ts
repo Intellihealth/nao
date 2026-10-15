@@ -41,7 +41,7 @@ describe('SlackSocketBridge', () => {
 
 	it('acks events without response payload support before dispatching to the adapter', async () => {
 		const response = createDeferred<Response>();
-		const webhooks = createSlackWebhooks(vi.fn(() => response.promise));
+		const webhooks = { slack: vi.fn(() => response.promise) };
 		const bridge = createBridge(webhooks);
 		const event = createSocketEvent({ acceptsResponsePayload: false });
 
@@ -60,9 +60,9 @@ describe('SlackSocketBridge', () => {
 	});
 
 	it('forwards fast adapter responses as ack payloads when Slack accepts them', async () => {
-		const webhooks = createSlackWebhooks(
-			vi.fn(() => Promise.resolve(new Response(JSON.stringify({ action: 'clear' }), { status: 200 }))),
-		);
+		const webhooks = {
+			slack: vi.fn(() => Promise.resolve(new Response(JSON.stringify({ action: 'clear' }), { status: 200 }))),
+		};
 		const bridge = createBridge(webhooks);
 		const event = createSocketEvent({ acceptsResponsePayload: true });
 
@@ -74,7 +74,7 @@ describe('SlackSocketBridge', () => {
 	it('acks payload-capable events without payload when adapter handling exceeds the ack deadline', async () => {
 		vi.useFakeTimers();
 		const response = createDeferred<Response>();
-		const webhooks = createSlackWebhooks(vi.fn(() => response.promise));
+		const webhooks = { slack: vi.fn(() => response.promise) };
 		const bridge = createBridge(webhooks);
 		const event = createSocketEvent({ acceptsResponsePayload: true });
 
@@ -102,10 +102,6 @@ function createBridge(webhooks: { slack: ReturnType<typeof vi.fn> }): TestBridge
 	}) as unknown as TestBridge;
 }
 
-function createSlackWebhooks(slack: ReturnType<typeof vi.fn>) {
-	return { slack };
-}
-
 function createSocketEvent(options: { acceptsResponsePayload: boolean }): TestSlackSocketEvent {
 	return {
 		ack: vi.fn().mockResolvedValue(undefined),
@@ -118,10 +114,8 @@ function createSocketEvent(options: { acceptsResponsePayload: boolean }): TestSl
 
 function createDeferred<T>() {
 	let resolve!: (value: T) => void;
-	let reject!: (reason?: unknown) => void;
-	const promise = new Promise<T>((promiseResolve, promiseReject) => {
+	const promise = new Promise<T>((promiseResolve) => {
 		resolve = promiseResolve;
-		reject = promiseReject;
 	});
-	return { promise, reject, resolve };
+	return { promise, resolve };
 }

@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as EnvModule from '../../src/env';
+import { createTestCaller } from '../helpers/trpc-caller';
 
 const mocks = vi.hoisted(() => ({
 	assertOrganizationCloudBillingAccess: vi.fn(),
@@ -59,6 +60,7 @@ import { contextRecommendationRoutes } from '../../src/trpc/context-recommendati
 import { router } from '../../src/trpc/trpc';
 
 const testRouter = router({ contextRecommendation: contextRecommendationRoutes });
+const caller = createTestCaller(testRouter);
 
 describe('context recommendation routes', () => {
 	beforeEach(() => {
@@ -72,7 +74,7 @@ describe('context recommendation routes', () => {
 		const accessError = new TRPCError({ code: 'FORBIDDEN', message: 'Cloud billing access is restricted' });
 		mocks.assertOrganizationCloudBillingAccess.mockRejectedValue(accessError);
 
-		await expect(caller().contextRecommendation.run()).rejects.toMatchObject({
+		await expect(caller.contextRecommendation.run()).rejects.toMatchObject({
 			code: 'FORBIDDEN',
 			message: 'Cloud billing access is restricted',
 		});
@@ -87,16 +89,8 @@ describe('context recommendation routes', () => {
 			new TRPCError({ code: 'FORBIDDEN', message: 'Cloud billing access is restricted' }),
 		);
 
-		await expect(caller().contextRecommendation.latestRun()).resolves.toEqual(latestRun);
+		await expect(caller.contextRecommendation.latestRun()).resolves.toEqual(latestRun);
 
 		expect(mocks.assertOrganizationCloudBillingAccess).not.toHaveBeenCalled();
 	});
 });
-
-function caller() {
-	return testRouter.createCaller({
-		session: { user: { id: 'user-id', email: 'admin@example.com', name: 'Admin' } },
-		selectedProjectId: 'project-id',
-		selectedOrganizationId: null,
-	} as never);
-}

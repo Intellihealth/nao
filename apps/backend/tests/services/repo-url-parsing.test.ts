@@ -11,16 +11,15 @@ describe('parsePullRequestUrl', () => {
 		});
 	});
 
-	it('rejects a URL that embeds github.com in the path of an unrelated host', () => {
-		expect(parsePullRequestUrl('https://evil.com/https://github.com/nao/context/pull/42')).toBeNull();
-	});
-
-	it('rejects a lookalike hostname', () => {
-		expect(parsePullRequestUrl('https://github.com.evil.com/nao/context/pull/42')).toBeNull();
-	});
-
-	it('rejects malformed URLs', () => {
-		expect(parsePullRequestUrl('not a url')).toBeNull();
+	it.each([
+		[
+			'a URL that embeds github.com in the path of an unrelated host',
+			'https://evil.com/https://github.com/nao/context/pull/42',
+		],
+		['a lookalike hostname', 'https://github.com.evil.com/nao/context/pull/42'],
+		['malformed URLs', 'not a url'],
+	])('rejects %s', (_case, url) => {
+		expect(parsePullRequestUrl(url)).toBeNull();
 	});
 });
 
@@ -32,15 +31,14 @@ describe('parseMergeRequestUrl', () => {
 		});
 	});
 
-	it('rejects a URL that embeds gitlab.com in the path of an unrelated host', () => {
-		expect(parseMergeRequestUrl('https://evil.com/https://gitlab.com/nao/context/-/merge_requests/7')).toBeNull();
-	});
-
-	it('rejects a lookalike hostname', () => {
-		expect(parseMergeRequestUrl('https://gitlab.com.evil.com/nao/context/-/merge_requests/7')).toBeNull();
-	});
-
-	it('rejects malformed URLs', () => {
-		expect(parseMergeRequestUrl('not a url')).toBeNull();
+	it.each([
+		[
+			'a URL that embeds gitlab.com in the path of an unrelated host',
+			'https://evil.com/https://gitlab.com/nao/context/-/merge_requests/7',
+		],
+		['a lookalike hostname', 'https://gitlab.com.evil.com/nao/context/-/merge_requests/7'],
+		['malformed URLs', 'not a url'],
+	])('rejects %s', (_case, url) => {
+		expect(parseMergeRequestUrl(url)).toBeNull();
 	});
 });

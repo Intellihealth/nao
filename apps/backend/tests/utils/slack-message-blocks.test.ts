@@ -47,6 +47,14 @@ function reconstructChunkedText(chunks: string[]): string {
 		.join('');
 }
 
+function omittedTableNotice(tableNumber: number): string {
+	return `\u00a0\u00a0\u00a0\u00a0*[ Table ${tableNumber} ]*`;
+}
+
+function singleValueTable(header: string): string {
+	return `| ${header} |\n|---|\n| value |`;
+}
+
 function tripleBacktickCount(text: string): number {
 	return text.split('\n').filter((line) => line.trimStart().startsWith('```')).length;
 }
@@ -308,12 +316,9 @@ describe('createTextBlocks', () => {
 
 	it('hides notices for a truncated first table and an additional table when requested', () => {
 		const rows = Array.from({ length: 150 }, (_, index) => `| ${index} |`);
-		const blocks = createTextBlocks(
-			['| N |', '|---|', ...rows, '', '| Another |', '|---|', '| value |'].join('\n'),
-			{
-				truncation: { kind: 'hidden' },
-			},
-		);
+		const blocks = createTextBlocks(['| N |', '|---|', ...rows, '', singleValueTable('Another')].join('\n'), {
+			truncation: { kind: 'hidden' },
+		});
 
 		expect(blocks.map((block) => block.type)).toEqual(['table']);
 	});
@@ -341,7 +346,7 @@ describe('createTextBlocks', () => {
 		expect(tables[0].rows).toHaveLength(15);
 		expect(blocks.map((block) => block.type)).toEqual(['table', 'text', 'text']);
 		expect(blocks[2]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 			style: 'muted',
 		});
 	});
@@ -350,9 +355,7 @@ describe('createTextBlocks', () => {
 		const oversizedHeaders = Array.from({ length: 20 }, (_, index) => `${index}-${'x'.repeat(300)}`);
 		const blocks = createTextBlocks(
 			[
-				'| First |',
-				'|---|',
-				'| value |',
+				singleValueTable('First'),
 				'',
 				`| ${oversizedHeaders.join(' | ')} |`,
 				`| ${oversizedHeaders.map(() => '---').join(' | ')} |`,
@@ -361,7 +364,7 @@ describe('createTextBlocks', () => {
 
 		expect(blocks.map((block) => block.type)).toEqual(['table', 'text']);
 		expect(blocks[1]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 			style: 'muted',
 		});
 	});
@@ -432,7 +435,7 @@ describe('createTextBlocks', () => {
 		});
 		expect(blocks[2]).toMatchObject({
 			type: 'text',
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 			style: 'muted',
 		});
 	});
@@ -440,29 +443,17 @@ describe('createTextBlocks', () => {
 	it('keeps consecutive omitted tables as separately numbered placeholders', () => {
 		const url = 'https://nao.example/chats/chat-123';
 		const blocks = createTextBlocks(
-			[
-				'| First |',
-				'|---|',
-				'| value |',
-				'',
-				'| Second |',
-				'|---|',
-				'| value |',
-				'',
-				'| Third |',
-				'|---|',
-				'| value |',
-			].join('\n'),
+			[singleValueTable('First'), '', singleValueTable('Second'), '', singleValueTable('Third')].join('\n'),
 			{ truncation: { kind: 'link', url } },
 		);
 
 		expect(blocks.map((block) => block.type)).toEqual(['table', 'text', 'text']);
 		expect(blocks[1]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 			style: 'muted',
 		});
 		expect(blocks[2]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 3 ]*',
+			content: omittedTableNotice(3),
 			style: 'muted',
 		});
 	});
@@ -471,52 +462,46 @@ describe('createTextBlocks', () => {
 		const url = 'https://nao.example/chats/chat-123';
 		const blocks = createTextBlocks(
 			[
-				'| First |',
-				'|---|',
-				'| value |',
+				singleValueTable('First'),
 				'',
-				'| Second |',
-				'|---|',
-				'| value |',
+				singleValueTable('Second'),
 				'',
 				'Between the additional tables.',
 				'',
-				'| Third |',
-				'|---|',
-				'| value |',
+				singleValueTable('Third'),
 			].join('\n'),
 			{ truncation: { kind: 'link', url } },
 		);
 
 		expect(blocks.map((block) => block.type)).toEqual(['table', 'text', 'text', 'text']);
 		expect(blocks[1]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 			style: 'muted',
 		});
 		expect(blocks[2]).toMatchObject({ content: 'Between the additional tables.' });
 		expect(blocks[3]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 3 ]*',
+			content: omittedTableNotice(3),
 			style: 'muted',
 		});
 	});
 
 	it('shares native table selection and hidden table counting across calls', () => {
 		const tableState = createSlackTableRenderState();
-		const firstBlocks = createTextBlocks('| First |\n|---|\n| value |', { tableState });
-		const secondBlocks = createTextBlocks('| Second |\n|---|\n| value |', { tableState });
+		const firstBlocks = createTextBlocks(singleValueTable('First'), { tableState });
+		const secondBlocks = createTextBlocks(singleValueTable('Second'), { tableState });
 
 		expect(firstBlocks.map((block) => block.type)).toEqual(['table']);
 		expect(secondBlocks.map((block) => block.type)).toEqual(['text']);
 		expect(secondBlocks[0]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 			style: 'muted',
 		});
 		expect(countHiddenTableNotices([...firstBlocks, ...secondBlocks])).toBe(1);
 	});
 
 	it('restores a table-only hidden run when rendering the final message', () => {
-		const firstTable = '| First |\n|---|\n| value |';
-		const secondTable = '| Second |\n|---|\n| value |';
+		const firstTable = singleValueTable('First');
+		const secondTable = singleValueTable('Second');
 		const streamingTableState = createSlackTableRenderState();
 
 		createTextBlocks(firstTable, {
@@ -545,7 +530,7 @@ describe('createTextBlocks', () => {
 
 		expect(finalBlocks.map((block) => block.type)).toEqual(['table', 'text']);
 		expect(finalBlocks[1]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 			style: 'muted',
 		});
 		expect(countHiddenTableNotices(finalBlocks)).toBe(1);
@@ -553,15 +538,15 @@ describe('createTextBlocks', () => {
 
 	it('continues hidden table numbering across calls', () => {
 		const tableState = createSlackTableRenderState();
-		createTextBlocks('| First |\n|---|\n| value |', { tableState });
-		const secondBlocks = createTextBlocks('| Second |\n|---|\n| value |', { tableState });
-		const thirdBlocks = createTextBlocks('| Third |\n|---|\n| value |', { tableState });
+		createTextBlocks(singleValueTable('First'), { tableState });
+		const secondBlocks = createTextBlocks(singleValueTable('Second'), { tableState });
+		const thirdBlocks = createTextBlocks(singleValueTable('Third'), { tableState });
 
 		expect(secondBlocks[0]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 		});
 		expect(thirdBlocks[0]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 3 ]*',
+			content: omittedTableNotice(3),
 		});
 	});
 
@@ -570,19 +555,19 @@ describe('createTextBlocks', () => {
 		const cell = 'x'.repeat(80);
 		const rows = Array.from({ length: 50 }, () => `| ${cell} | ${cell} |`);
 		const firstBlocks = createTextBlocks(['| A | B |', '|---|---|', ...rows].join('\n'), { tableState });
-		const secondBlocks = createTextBlocks('| Second |\n|---|\n| value |', { tableState });
+		const secondBlocks = createTextBlocks(singleValueTable('Second'), { tableState });
 
 		expect(tableState.remainingTableChars).toBeLessThan(1000);
 		expect(firstBlocks.filter((block) => block.type === 'table')).toHaveLength(1);
 		expect(secondBlocks.filter((block) => block.type === 'table')).toHaveLength(0);
 		expect(secondBlocks[0]).toMatchObject({
-			content: '\u00a0\u00a0\u00a0\u00a0*[ Table 2 ]*',
+			content: omittedTableNotice(2),
 		});
 	});
 
 	it('uses independent table state when none is provided', () => {
-		const firstBlocks = createTextBlocks('| First |\n|---|\n| value |');
-		const secondBlocks = createTextBlocks('| Second |\n|---|\n| value |');
+		const firstBlocks = createTextBlocks(singleValueTable('First'));
+		const secondBlocks = createTextBlocks(singleValueTable('Second'));
 
 		expect(firstBlocks.filter((block) => block.type === 'table')).toHaveLength(1);
 		expect(secondBlocks.filter((block) => block.type === 'table')).toHaveLength(1);
@@ -592,19 +577,7 @@ describe('createTextBlocks', () => {
 describe('countHiddenTableNotices', () => {
 	it('counts omitted table placeholders in rendered children', () => {
 		const children = createTextBlocks(
-			[
-				'| First |',
-				'|---|',
-				'| value |',
-				'',
-				'| Second |',
-				'|---|',
-				'| value |',
-				'',
-				'| Third |',
-				'|---|',
-				'| value |',
-			].join('\n'),
+			[singleValueTable('First'), '', singleValueTable('Second'), '', singleValueTable('Third')].join('\n'),
 		);
 
 		expect(countHiddenTableNotices(children)).toBe(2);

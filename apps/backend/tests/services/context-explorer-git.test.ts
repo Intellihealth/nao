@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -136,9 +135,23 @@ import {
 	validateDeploymentContextSubpath,
 } from '../../src/utils/context-repo';
 import { getGitOAuthCredential, runGitFetchWithCredentials, runGitWithOAuth } from '../../src/utils/git-oauth';
+import {
+	baseContext,
+	commitAll,
+	type ContextGitFixture,
+	createContextGitFixture,
+	expectLiveUnchanged,
+	fileAccess,
+	initRepository,
+	localProvider,
+	runGit,
+	snapshot,
+} from '../helpers/context-git-fixture';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
+
+const createTemporaryFolder = useTemporaryFolders();
 
 describe('OAuth Git credentials', () => {
-	const temporaryRoots: string[] = [];
 	let originalPath: string | undefined;
 
 	beforeEach(() => {
@@ -148,22 +161,16 @@ describe('OAuth Git credentials', () => {
 	afterEach(() => {
 		process.env.PATH = originalPath;
 		delete process.env.EXPECTED_OAUTH_TOKEN;
-		for (const root of temporaryRoots.splice(0)) {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
 	});
 
 	it.each([
 		['github', 'x-access-token'],
 		['gitlab', 'oauth2'],
 	] as const)('uses an ephemeral askpass helper for %s without putting the token in argv', (provider, username) => {
-		const root = temporaryRoot(temporaryRoots);
-		const bin = path.join(root, 'bin');
-		const fakeGit = path.join(bin, 'git');
+		const root = temporaryRoot();
 		const token = `${provider}-oauth-secret`;
-		fs.mkdirSync(bin);
-		fs.writeFileSync(
-			fakeGit,
+		installFakeGit(
+			root,
 			`#!/bin/sh
 user="$("$GIT_ASKPASS" "Username for repository")"
 password="$("$GIT_ASKPASS" "Password for repository")"
@@ -171,9 +178,7 @@ password="$("$GIT_ASKPASS" "Password for repository")"
 case "$*" in *"$EXPECTED_OAUTH_TOKEN"*) exit 3 ;; esac
 printf '%s|%s' "$user" "$GIT_ASKPASS"
 `,
-			{ mode: 0o700 },
 		);
-		process.env.PATH = `${bin}:${originalPath ?? ''}`;
 		process.env.EXPECTED_OAUTH_TOKEN = token;
 
 		const [actualUsername, helperPath] = runGitWithOAuth(
@@ -194,21 +199,16 @@ printf '%s|%s' "$user" "$GIT_ASKPASS"
 		['bitbucket', 'x-token-auth'],
 		[null, 'git'],
 	] as const)('fetches with a scoped %s deployment token', (platform, expectedUsername) => {
-		const root = temporaryRoot(temporaryRoots);
-		const bin = path.join(root, 'bin');
-		const fakeGit = path.join(bin, 'git');
+		const root = temporaryRoot();
 		const token = 'deployment-secret';
-		fs.mkdirSync(bin);
-		fs.writeFileSync(
-			fakeGit,
+		installFakeGit(
+			root,
 			`#!/bin/sh
 username="$("$GIT_ASKPASS" "Username for repository")"
 password="$("$GIT_ASKPASS" "Password for repository")"
 printf '%s|%s|%s|%s' "$*" "$username" "$password" "$GIT_ASKPASS"
 `,
-			{ mode: 0o700 },
 		);
-		process.env.PATH = `${bin}:${originalPath ?? ''}`;
 
 		const [argv, username, password, helperPath] = runGitFetchWithCredentials(
 			root,
@@ -227,18 +227,13 @@ printf '%s|%s|%s|%s' "$*" "$username" "$password" "$GIT_ASKPASS"
 	});
 
 	it('removes embedded HTTPS credentials from fetch argv and cleans up askpass', () => {
-		const root = temporaryRoot(temporaryRoots);
-		const bin = path.join(root, 'bin');
-		const fakeGit = path.join(bin, 'git');
-		fs.mkdirSync(bin);
-		fs.writeFileSync(
-			fakeGit,
+		const root = temporaryRoot();
+		installFakeGit(
+			root,
 			`#!/bin/sh
 printf '%s|%s|%s|%s' "$*" "$("$GIT_ASKPASS" "Username")" "$("$GIT_ASKPASS" "Password")" "$GIT_ASKPASS"
 `,
-			{ mode: 0o700 },
 		);
-		process.env.PATH = `${bin}:${originalPath ?? ''}`;
 
 		const [argv, username, password, helperPath] = runGitFetchWithCredentials(
 			root,
@@ -258,18 +253,13 @@ printf '%s|%s|%s|%s' "$*" "$("$GIT_ASKPASS" "Username")" "$("$GIT_ASKPASS" "Pass
 	});
 
 	it('supports credential-free fetches and removes temporary SSH keys', () => {
-		const root = temporaryRoot(temporaryRoots);
-		const bin = path.join(root, 'bin');
-		const fakeGit = path.join(bin, 'git');
-		fs.mkdirSync(bin);
-		fs.writeFileSync(
-			fakeGit,
+		const root = temporaryRoot();
+		installFakeGit(
+			root,
 			`#!/bin/sh
 printf '%s|%s|%s' "$*" "$GIT_ASKPASS" "$GIT_SSH_COMMAND"
 `,
-			{ mode: 0o700 },
 		);
-		process.env.PATH = `${bin}:${originalPath ?? ''}`;
 
 		const [publicArgv, publicAskpass] = runGitFetchWithCredentials(
 			root,
@@ -318,18 +308,10 @@ printf '%s|%s|%s' "$*" "$GIT_ASKPASS" "$GIT_SSH_COMMAND"
 });
 
 describe('deployment context source', () => {
-	let originalEnv: typeof process.env;
-
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-		contextConfigMocks.getConfig.mockResolvedValue(null);
-	});
+	isolateContextGitState();
 
 	afterEach(() => {
-		process.env = originalEnv;
-		__reloadEnvForTesting();
 		vi.unstubAllGlobals();
-		branchOwnershipMocks.reviewRequests.clear();
 	});
 
 	it.each([
@@ -673,27 +655,10 @@ describe('deployment context source', () => {
 });
 
 describe('live deployment context updates', () => {
-	const temporaryRoots: string[] = [];
-	let originalEnv: typeof process.env;
-
-	beforeEach(() => {
-		originalEnv = { ...process.env };
-		contextConfigMocks.getConfig.mockResolvedValue(null);
-	});
-
-	afterEach(() => {
-		for (const root of temporaryRoots.splice(0)) {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-		branchOwnershipMocks.owners.clear();
-		vi.clearAllMocks();
-		process.env = originalEnv;
-		__reloadEnvForTesting();
-	});
+	isolateContextGitState();
 
 	it('rejects a configured context subfolder that is missing', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
+		const fixture = createBareOriginCloneFixture();
 		setContextSourceEnv({
 			url: fixture.bare,
 			branch: 'main',
@@ -717,17 +682,17 @@ describe('live deployment context updates', () => {
 			unavailableReason: 'The configured context subfolder "example" was not found in the repository.',
 			configurationError: 'The configured context subfolder "example" was not found in the repository.',
 		});
-		const liveCommit = runGit(fixture.live, ['rev-parse', 'HEAD']).toString().trim();
+		const liveCommit = headCommit(fixture.live);
 		writeRemoteChange(fixture, 'project/context.md', 'must not be pulled\n');
 
 		expect(() => pullLiveContext(fixture.live)).toThrow(
 			'The configured context subfolder "example" was not found in the repository.',
 		);
-		expect(runGit(fixture.live, ['rev-parse', 'HEAD']).toString().trim()).toBe(liveCommit);
+		expect(headCommit(fixture.live)).toBe(liveCommit);
 	});
 
 	it('rejects a configured context subfolder without a tracked nao config', () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: root\n',
 			'example/context.md': 'context\n',
 		});
@@ -742,21 +707,15 @@ describe('live deployment context updates', () => {
 		['///', '', { 'nao_config.yaml': 'name: root\n' }],
 		['example', 'example', { 'example/nao_config.yaml': 'name: example\n' }],
 	] as const)('accepts configured context subpath %s', (configuredSubpath, expectedPrefix, files) => {
-		const fixture = createFixture(temporaryRoots, files);
+		const fixture = createFixture(files);
 
 		expect(validateDeploymentContextSubpath(fixture.seed, configuredSubpath)).toBe(expectedPrefix);
 	});
 
 	it('fast-forwards the live checkout and reports context-only file stats', () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
-		setContextSourceEnv({
-			url: fixture.bare,
-			branch: 'main',
-			subpath: 'project',
-			sshKey: 'deployment-key',
-		});
-		const oldCommit = runGit(fixture.live, ['rev-parse', 'HEAD']).toString().trim();
+		const fixture = createBareOriginCloneFixture();
+		setProjectDeploymentEnv(fixture);
+		const oldCommit = headCommit(fixture.live);
 		fs.writeFileSync(path.join(fixture.seed, 'project', 'context.md'), 'updated context\nsecond line\n');
 		fs.writeFileSync(path.join(fixture.seed, 'project', 'binary.dat'), Buffer.from([0, 1, 2, 3]));
 		fs.writeFileSync(path.join(fixture.seed, 'outside.md'), 'not part of this nao project\n');
@@ -768,7 +727,7 @@ describe('live deployment context updates', () => {
 		expect(result).toMatchObject({
 			changed: true,
 			oldCommit,
-			newCommit: runGit(fixture.seed, ['rev-parse', 'HEAD']).toString().trim(),
+			newCommit: headCommit(fixture.seed),
 			files: [
 				{ path: '/binary.dat', additions: null, deletions: null },
 				{ path: '/context.md', additions: 2, deletions: 1 },
@@ -785,10 +744,9 @@ describe('live deployment context updates', () => {
 	});
 
 	it('returns already-up-to-date semantics when the live commit does not change', () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
-		setContextSourceEnv({ url: fixture.bare, branch: 'main', subpath: 'project', sshKey: 'deployment-key' });
-		const commit = runGit(fixture.live, ['rev-parse', 'HEAD']).toString().trim();
+		const fixture = createBareOriginCloneFixture();
+		setProjectDeploymentEnv(fixture);
+		const commit = headCommit(fixture.live);
 
 		expect(pullLiveContext(fixture.live)).toMatchObject({
 			changed: false,
@@ -799,15 +757,14 @@ describe('live deployment context updates', () => {
 	});
 
 	it('rejects updates outside Git deployment mode and from the wrong live branch', () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
+		const fixture = createBareOriginCloneFixture();
 		setContextSourceEnv({ source: null });
 
 		expect(() => pullLiveContext(fixture.live)).toThrow(
 			'Live context updates are only available when NAO_CONTEXT_SOURCE is set to git.',
 		);
 
-		setContextSourceEnv({ url: fixture.bare, branch: 'main', subpath: 'project', sshKey: 'deployment-key' });
+		setProjectDeploymentEnv(fixture);
 		runGit(fixture.live, ['switch', '-c', 'other']);
 
 		expect(() => pullLiveContext(fixture.live)).toThrow(
@@ -816,14 +773,13 @@ describe('live deployment context updates', () => {
 	});
 
 	it('rejects a mismatched deployment origin before fetching', () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
+		const fixture = createBareOriginCloneFixture();
 		setContextSourceEnv({
 			url: path.join(fixture.root, 'different.git'),
 			branch: 'main',
 			subpath: 'project',
 		});
-		const commit = runGit(fixture.live, ['rev-parse', 'HEAD']).toString().trim();
+		const commit = headCommit(fixture.live);
 
 		expect(getLiveContextUpdateStatus(fixture.live)).toMatchObject({
 			available: false,
@@ -832,11 +788,11 @@ describe('live deployment context updates', () => {
 		expect(() => pullLiveContext(fixture.live)).toThrow(
 			"The configured repository does not match the live project's Git repository.",
 		);
-		expect(runGit(fixture.live, ['rev-parse', 'HEAD']).toString().trim()).toBe(commit);
+		expect(headCommit(fixture.live)).toBe(commit);
 	});
 
 	it('accepts equivalent deployment origins with different URL forms and credentials', () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		runGit(fixture.live, ['remote', 'set-url', 'origin', 'git@github.com:nao/context.git']);
 		setContextSourceEnv({
 			url: 'https://deploy-user:deploy-secret@github.com/nao/context.git',
@@ -851,18 +807,15 @@ describe('live deployment context updates', () => {
 	});
 
 	it('redacts deployment credentials from fetch errors and removes askpass', () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		const repositoryUrl = 'https://deploy-user:deploy-secret@example.com/nao/context.git';
 		const publicUrl = 'https://example.com/nao/context.git';
 		runGit(fixture.live, ['remote', 'set-url', 'origin', publicUrl]);
 		setContextSourceEnv({ url: repositoryUrl, branch: 'main', subpath: 'project' });
-		const bin = path.join(fixture.root, 'bin');
-		const fakeGit = path.join(bin, 'git');
 		const capturePath = path.join(fixture.root, 'askpass-path');
 		const realGit = execFileSync('sh', ['-c', 'command -v git']).toString().trim();
-		fs.mkdirSync(bin);
-		fs.writeFileSync(
-			fakeGit,
+		installFakeGit(
+			fixture.root,
 			`#!/bin/sh
 if [ "$1" = "fetch" ]; then
   printf '%s' "$GIT_ASKPASS" > "$CAPTURE_ASKPASS_PATH"
@@ -872,9 +825,7 @@ if [ "$1" = "fetch" ]; then
 fi
 exec '${realGit.replaceAll("'", "'\\''")}' "$@"
 `,
-			{ mode: 0o700 },
 		);
-		process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
 		process.env.CAPTURE_ASKPASS_PATH = capturePath;
 
 		let error: Error | null = null;
@@ -892,39 +843,32 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
 	});
 
 	it('waits for confirmation before moving a linked default worktree to live HEAD', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
+		const fixture = createBareOriginCloneFixture();
 		fixture.context.providerOverride = localProvider(fixture.bare, fixture.bare);
-		setContextSourceEnv({
-			url: fixture.bare,
-			branch: 'main',
-			subpath: 'project',
-			sshKey: 'deployment-key',
-		});
+		setProjectDeploymentEnv(fixture);
 		const repo = await ensureContextWorktree(fixture.context);
-		const liveCommit = runGit(fixture.live, ['rev-parse', 'HEAD']).toString().trim();
+		const liveCommit = headCommit(fixture.live);
 		writeRemoteChange(fixture, 'project/context.md', 'fetched but not pulled\n');
 		runGit(fixture.live, ['fetch', 'origin', 'main']);
-		const remoteCommit = runGit(fixture.live, ['rev-parse', 'origin/main']).toString().trim();
+		const remoteCommit = gitOutput(fixture.live, ['rev-parse', 'origin/main']);
 
 		expect(remoteCommit).not.toBe(liveCommit);
 		await ensureContextWorktree(fixture.context);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(liveCommit);
+		expect(headCommit(repo.worktreeRoot)).toBe(liveCommit);
 
 		const pull = pullLiveContext(fixture.live);
 		await ensureContextWorktree(fixture.context);
 
 		expect(pull.newCommit).toBe(remoteCommit);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(liveCommit);
+		expect(headCommit(repo.worktreeRoot)).toBe(liveCommit);
 
 		await updateContextWorktree(fixture.context);
 
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(remoteCommit);
+		expect(headCommit(repo.worktreeRoot)).toBe(remoteCommit);
 	});
 
 	it('updates only the confirmed user worktree after the live pull', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
+		const fixture = createBareOriginCloneFixture();
 		fixture.context.providerOverride = localProvider(fixture.bare, fixture.bare);
 		const cleanContext = fixture.context;
 		const dirtyContext = { ...fixture.context, userId: 'dirty-user' };
@@ -934,13 +878,8 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
 		const branchRepo = await ensureContextWorktree(branchContext);
 		fs.writeFileSync(path.join(dirtyRepo.worktreeRoot, 'project', 'context.md'), 'uncommitted work\n');
 		await createContextBranch(branchContext, 'nao/personal');
-		const oldCommit = runGit(cleanRepo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
-		setContextSourceEnv({
-			url: fixture.bare,
-			branch: 'main',
-			subpath: 'project',
-			sshKey: 'deployment-key',
-		});
+		const oldCommit = headCommit(cleanRepo.worktreeRoot);
+		setProjectDeploymentEnv(fixture);
 		writeRemoteChange(fixture, 'project/context.md', 'new deployed context\n');
 
 		const pull = pullLiveContext(fixture.live);
@@ -949,32 +888,24 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
 		await ensureContextWorktree(branchContext);
 
 		expect(pull.changed).toBe(true);
-		expect(runGit(cleanRepo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
-		expect(runGit(dirtyRepo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
+		expect(headCommit(cleanRepo.worktreeRoot)).toBe(oldCommit);
+		expect(headCommit(dirtyRepo.worktreeRoot)).toBe(oldCommit);
 		expect(fs.readFileSync(path.join(dirtyRepo.worktreeRoot, 'project', 'context.md'), 'utf8')).toBe(
 			'uncommitted work\n',
 		);
-		expect(runGit(branchRepo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe(
-			'nao/personal',
-		);
-		expect(runGit(branchRepo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
+		expect(currentBranch(branchRepo.worktreeRoot)).toBe('nao/personal');
+		expect(headCommit(branchRepo.worktreeRoot)).toBe(oldCommit);
 
 		await updateContextWorktree(cleanContext);
 
-		expect(runGit(cleanRepo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(pull.newCommit);
-		expect(runGit(dirtyRepo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
-		expect(runGit(branchRepo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
+		expect(headCommit(cleanRepo.worktreeRoot)).toBe(pull.newCommit);
+		expect(headCommit(dirtyRepo.worktreeRoot)).toBe(oldCommit);
+		expect(headCommit(branchRepo.worktreeRoot)).toBe(oldCommit);
 	});
 
 	it('waits for confirmation before updating a standalone deployment worktree', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
-		setContextSourceEnv({
-			url: fixture.bare,
-			branch: 'main',
-			subpath: 'project',
-			sshKey: 'deployment-key',
-		});
+		const fixture = createBareOriginCloneFixture();
+		setProjectDeploymentEnv(fixture);
 		fixture.context = {
 			...baseContext(fixture.live),
 			configOverride: undefined,
@@ -982,48 +913,35 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
 			providerOverride: localProvider(fixture.bare, fixture.bare),
 		};
 		const repo = await ensureContextWorktree(fixture.context);
-		const oldCommit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const oldCommit = headCommit(repo.worktreeRoot);
 		writeRemoteChange(fixture, 'project/context.md', 'standalone update\n');
 
 		const pull = pullLiveContext(fixture.live);
 		await ensureContextWorktree(fixture.context);
 
 		expect(pull.newCommit).not.toBe(oldCommit);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
+		expect(headCommit(repo.worktreeRoot)).toBe(oldCommit);
 		await expect(getContextRepositoryStatus(fixture.context)).resolves.toMatchObject({
 			fileExplorerUpdate: { updateNeeded: true, switchNeeded: true, branch: 'main' },
 		});
 
 		await updateContextWorktree(fixture.context);
 
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(pull.newCommit);
+		expect(headCommit(repo.worktreeRoot)).toBe(pull.newCommit);
 	});
 });
 
 describe('OAuth live context updates', () => {
-	const temporaryRoots: string[] = [];
-	let originalEnv: typeof process.env;
+	isolateContextGitState();
 
 	beforeEach(() => {
-		originalEnv = { ...process.env };
 		setContextSourceEnv({ source: null });
-		contextConfigMocks.getConfig.mockResolvedValue(null);
-	});
-
-	afterEach(() => {
-		for (const root of temporaryRoots.splice(0)) {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-		branchOwnershipMocks.owners.clear();
-		vi.clearAllMocks();
-		process.env = originalEnv;
-		__reloadEnvForTesting();
 	});
 
 	it.each(['github', 'gitlab'] as const)(
 		'clones a non-Git root project with the invoking %s credential and keeps a public origin',
 		async (providerName) => {
-			const fixture = createFixture(temporaryRoots);
+			const fixture = createFixture();
 			const provider = localProvider(fixture.bare, fixture.bare);
 			fixture.context = {
 				...fixture.context,
@@ -1046,14 +964,14 @@ describe('OAuth live context updates', () => {
 			});
 			expect(fs.readFileSync(path.join(fixture.live, 'context.md'), 'utf8')).toBe('repository content\n');
 			expect(fs.existsSync(path.join(fixture.live, '.git'))).toBe(true);
-			expect(runGit(fixture.live, ['remote', 'get-url', 'origin']).toString().trim()).toBe(fixture.bare);
+			expect(gitOutput(fixture.live, ['remote', 'get-url', 'origin'])).toBe(fixture.bare);
 			expect(fs.existsSync(path.join(fixture.live, 'live-only.md'))).toBe(false);
 			expect(JSON.stringify(result)).not.toContain(`${providerName}-oauth-secret`);
 		},
 	);
 
 	it('shows the OAuth update status and repository link without deployment Git', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.providerOverride = localProvider(fixture.bare, fixture.bare);
 
 		await expect(getContextRepositoryStatus(fixture.context)).resolves.toMatchObject({
@@ -1067,7 +985,7 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('explains missing OAuth credentials and wrong live branches in status', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.providerOverride = localProvider(fixture.bare, fixture.bare);
 
 		await expect(getContextRepositoryStatus({ ...fixture.context, token: null })).resolves.toMatchObject({
@@ -1091,7 +1009,7 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('leaves the original project untouched when staged project validation fails', async () => {
-		const fixture = createFixture(temporaryRoots, { 'context.md': 'repository content\n' });
+		const fixture = createFixture({ 'context.md': 'repository content\n' });
 		fixture.context.providerOverride = localProvider(fixture.bare, fixture.bare);
 		const before = snapshot(fixture.live);
 
@@ -1104,7 +1022,7 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('rejects unsafe non-Git targets before cloning', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.providerOverride = localProvider(fixture.bare, fixture.bare);
 		fs.rmSync(path.join(fixture.live, 'nao_config.yaml'));
 		const before = snapshot(fixture.live);
@@ -1116,7 +1034,7 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('fast-forwards a matching origin, reports the full range, and handles a no-op', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.providerOverride = localProvider(fixture.bare, fixture.bare);
 		const initial = await pullLiveContext(fixture.context);
 		writeRemoteChange(fixture, 'context.md', 'updated\nsecond line\n');
@@ -1138,7 +1056,7 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('rejects the wrong branch, divergence, local conflicts, and a mismatched origin', async () => {
-		const wrongBranch = createFixture(temporaryRoots);
+		const wrongBranch = createFixture();
 		wrongBranch.context.providerOverride = localProvider(wrongBranch.bare, wrongBranch.bare);
 		await pullLiveContext(wrongBranch.context);
 		runGit(wrongBranch.live, ['switch', '-c', 'other']);
@@ -1146,7 +1064,7 @@ describe('OAuth live context updates', () => {
 			'The live checkout is on "other", not the repository default "main" branch.',
 		);
 
-		const divergent = createFixture(temporaryRoots);
+		const divergent = createFixture();
 		divergent.context.providerOverride = localProvider(divergent.bare, divergent.bare);
 		await pullLiveContext(divergent.context);
 		fs.writeFileSync(path.join(divergent.live, 'local.md'), 'local\n');
@@ -1156,7 +1074,7 @@ describe('OAuth live context updates', () => {
 			'The live context branch has diverged and cannot be updated with a fast-forward pull.',
 		);
 
-		const dirty = createFixture(temporaryRoots);
+		const dirty = createFixture();
 		dirty.context.providerOverride = localProvider(dirty.bare, dirty.bare);
 		await pullLiveContext(dirty.context);
 		fs.writeFileSync(path.join(dirty.live, 'context.md'), 'local dirty\n');
@@ -1165,8 +1083,8 @@ describe('OAuth live context updates', () => {
 			'The live context has local changes that would be overwritten by this update.',
 		);
 
-		const mismatched = createLocalCloneFixture(temporaryRoots);
-		const selected = createFixture(temporaryRoots);
+		const mismatched = createLocalCloneFixture();
+		const selected = createFixture();
 		mismatched.context.providerOverride = localProvider(selected.bare, selected.bare);
 		await expect(pullLiveContext(mismatched.context)).rejects.toThrow(
 			"The selected repository does not match the live project's Git repository.",
@@ -1175,7 +1093,7 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('keeps a nested project at the same path through a restart-style resolution', async () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'analytics/nao_config.yaml': 'name: analytics\n',
 			'analytics/context.md': 'nested context\n',
 		});
@@ -1195,7 +1113,7 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('refreshes independent worktree refs without changing feature branches or dirty files', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const provider = localProvider(fixture.bare, fixture.bare);
 		fixture.context.providerOverride = provider;
 		const clean = await ensureContextWorktree(fixture.context);
@@ -1203,7 +1121,7 @@ describe('OAuth live context updates', () => {
 		const branchContext = { ...fixture.context, userId: 'branch-user' };
 		const dirty = await ensureContextWorktree(dirtyContext);
 		const branch = await ensureContextWorktree(branchContext);
-		const oldCommit = runGit(clean.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const oldCommit = headCommit(clean.worktreeRoot);
 		await createContextBranch(branchContext, 'nao/personal');
 		await createContextBranch(dirtyContext, 'nao/dirty');
 		fs.writeFileSync(path.join(dirty.worktreeRoot, 'context.md'), 'dirty\n');
@@ -1211,23 +1129,21 @@ describe('OAuth live context updates', () => {
 
 		const result = await pullLiveContext(fixture.context);
 
-		expect(runGit(clean.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('HEAD');
-		expect(runGit(clean.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(result.newCommit);
-		expect(runGit(clean.worktreeRoot, ['rev-parse', 'origin/main']).toString().trim()).toBe(result.newCommit);
-		expect(runGit(branch.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe(
-			'nao/personal',
-		);
-		expect(runGit(branch.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
-		expect(runGit(branch.worktreeRoot, ['rev-parse', 'origin/main']).toString().trim()).toBe(result.newCommit);
+		expect(currentBranch(clean.worktreeRoot)).toBe('HEAD');
+		expect(headCommit(clean.worktreeRoot)).toBe(result.newCommit);
+		expect(gitOutput(clean.worktreeRoot, ['rev-parse', 'origin/main'])).toBe(result.newCommit);
+		expect(currentBranch(branch.worktreeRoot)).toBe('nao/personal');
+		expect(headCommit(branch.worktreeRoot)).toBe(oldCommit);
+		expect(gitOutput(branch.worktreeRoot, ['rev-parse', 'origin/main'])).toBe(result.newCommit);
 		await expect(getContextRepositoryStatus(branchContext)).resolves.toMatchObject({
 			fileExplorerUpdate: { updateNeeded: false, switchNeeded: true, branch: 'main' },
 		});
 		await expect(
 			getHistoricalContextDiffActions(branchContext, [{ fromCommit: oldCommit, toCommit: result.newCommit }]),
 		).resolves.toEqual(['switch']);
-		expect(runGit(dirty.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('nao/dirty');
-		expect(runGit(dirty.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
-		expect(runGit(dirty.worktreeRoot, ['rev-parse', 'origin/main']).toString().trim()).toBe(result.newCommit);
+		expect(currentBranch(dirty.worktreeRoot)).toBe('nao/dirty');
+		expect(headCommit(dirty.worktreeRoot)).toBe(oldCommit);
+		expect(gitOutput(dirty.worktreeRoot, ['rev-parse', 'origin/main'])).toBe(result.newCommit);
 		expect(fs.readFileSync(path.join(dirty.worktreeRoot, 'context.md'), 'utf8')).toBe('dirty\n');
 		await expect(
 			getHistoricalContextDiffActions(dirtyContext, [{ fromCommit: oldCommit, toCommit: result.newCommit }]),
@@ -1235,11 +1151,11 @@ describe('OAuth live context updates', () => {
 	});
 
 	it('rechecks the current branch after refreshing independent refs', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const provider = localProvider(fixture.bare, fixture.bare);
 		fixture.context.providerOverride = provider;
 		const repo = await ensureContextWorktree(fixture.context);
-		const oldCommit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const oldCommit = headCommit(repo.worktreeRoot);
 		writeRemoteChange(fixture, 'context.md', 'new live context\n');
 		const authenticatedRepoUrl = vi.spyOn(provider, 'authenticatedRepoUrl').mockImplementation(() => {
 			runGit(repo.worktreeRoot, ['switch', '-c', 'during-fetch']);
@@ -1249,14 +1165,13 @@ describe('OAuth live context updates', () => {
 		const result = await pullLiveContext(fixture.context);
 
 		expect(authenticatedRepoUrl).toHaveBeenCalledOnce();
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'origin/main']).toString().trim()).toBe(result.newCommit);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('during-fetch');
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(oldCommit);
+		expect(gitOutput(repo.worktreeRoot, ['rev-parse', 'origin/main'])).toBe(result.newCommit);
+		expect(currentBranch(repo.worktreeRoot)).toBe('during-fetch');
+		expect(headCommit(repo.worktreeRoot)).toBe(oldCommit);
 	});
 
 	it('does not fetch a linked worktree when shared refs already match live HEAD', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
+		const fixture = createBareOriginCloneFixture();
 		const provider = localProvider(fixture.bare, fixture.bare);
 		fixture.context.providerOverride = provider;
 		const repo = await ensureContextWorktree(fixture.context);
@@ -1265,8 +1180,8 @@ describe('OAuth live context updates', () => {
 
 		const result = await pullLiveContext(fixture.context);
 
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'origin/main']).toString().trim()).toBe(result.newCommit);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(result.newCommit);
+		expect(gitOutput(repo.worktreeRoot, ['rev-parse', 'origin/main'])).toBe(result.newCommit);
+		expect(headCommit(repo.worktreeRoot)).toBe(result.newCommit);
 		expect(authenticatedRepoUrl).not.toHaveBeenCalled();
 	});
 });
@@ -1333,29 +1248,15 @@ describe('repository remote normalization', () => {
 });
 
 describe('context explorer worktrees', () => {
-	const temporaryRoots: string[] = [];
-	let originalEnv: typeof process.env;
+	isolateContextGitState();
 
 	beforeEach(() => {
-		originalEnv = { ...process.env };
 		setContextSourceEnv({ source: null });
-		contextConfigMocks.getConfig.mockResolvedValue(null);
 		contextConfigMocks.updateConfig.mockResolvedValue(undefined);
 	});
 
-	afterEach(() => {
-		for (const root of temporaryRoots.splice(0)) {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-		branchOwnershipMocks.owners.clear();
-		branchOwnershipMocks.reviewRequests.clear();
-		vi.clearAllMocks();
-		process.env = originalEnv;
-		__reloadEnvForTesting();
-	});
-
 	it('clones into the derived worktree and never changes the live folder', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const before = snapshot(fixture.live);
 
 		const repo = await ensureContextWorktree(fixture.context);
@@ -1370,7 +1271,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('encodes unsafe user ids without escaping the project worktree directory', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const repo = await ensureContextWorktree({ ...fixture.context, userId: '../other/user' });
 		const projectWorktrees = path.join(fixture.root, '.nao', 'worktrees', 'project-id');
 
@@ -1380,7 +1281,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('uses git worktree add when the live folder is inside the connected clone', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		const before = snapshot(fixture.live);
 
 		const repo = await ensureContextWorktree(fixture.context);
@@ -1395,7 +1296,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('uses a fresh full clone and configured subpath for deployment-managed Git', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		setContextSourceEnv({
 			url: 'https://github.com/nao/context.git',
 			branch: 'main',
@@ -1406,7 +1307,7 @@ describe('context explorer worktrees', () => {
 		fixture.context.configOverride = undefined;
 
 		const repo = await ensureContextWorktree(fixture.context);
-		const gitDirectory = runGit(repo.worktreeRoot, ['rev-parse', '--absolute-git-dir']).toString().trim();
+		const gitDirectory = gitOutput(repo.worktreeRoot, ['rev-parse', '--absolute-git-dir']);
 
 		expect(repo.provider).toBe('generic');
 		expect(repo.projectPrefix).toBe('project');
@@ -1420,7 +1321,7 @@ describe('context explorer worktrees', () => {
 		['token', { token: 'deployment-token' }, 'deployment-token'],
 		['SSH key', { sshKey: 'private-key' }, ''],
 	] as const)('makes deployment-managed Git available with a %s', async (_label, credentials, token) => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		setContextSourceEnv({ url: 'https://github.com/nao/context.git', ...credentials });
 		fixture.context.token = token;
 		fixture.context.configOverride = undefined;
@@ -1432,7 +1333,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('isolates users in detached worktrees from the same local clone', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		const secondContext = { ...fixture.context, userId: 'user-2' };
 
 		const firstRepo = await ensureContextWorktree(fixture.context);
@@ -1443,15 +1344,15 @@ describe('context explorer worktrees', () => {
 		await writeFileContent('/context.md', 'first user edit\n', firstFile.hash, firstAccess);
 
 		expect(firstRepo.worktreeRoot).not.toBe(secondRepo.worktreeRoot);
-		expect(runGit(firstRepo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('HEAD');
-		expect(runGit(secondRepo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('HEAD');
+		expect(currentBranch(firstRepo.worktreeRoot)).toBe('HEAD');
+		expect(currentBranch(secondRepo.worktreeRoot)).toBe('HEAD');
 		expect((await getContextRepositoryStatus(fixture.context)).branches?.currentBranch).toBe('main');
 		expect((await getContextRepositoryStatus(secondContext)).branches?.currentBranch).toBe('main');
 		expect((await readFileContent('/context.md', secondAccess)).content).toBe('repository content\n');
 	});
 
 	it('keeps a cloned project read-only when no repository setting exists', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		fixture.context.configOverride = undefined;
 		const worktree = getContextWorktreePath('project-id', fixture.live, 'user-1');
 
@@ -1511,8 +1412,8 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('rejects a repository connection when the live project clone points elsewhere', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		const selected = createFixture(temporaryRoots, {
+		const fixture = createLocalCloneFixture();
+		const selected = createFixture({
 			'nao_config.yaml': 'name: selected\n',
 			'context.md': 'selected repository content\n',
 		});
@@ -1537,8 +1438,8 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('keeps a persisted repository mismatch unavailable and blocks Git mutations', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
-		const selected = createFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
+		const selected = createFixture();
 		const context = {
 			...fixture.context,
 			configOverride: { provider: 'github' as const, repoFullName: 'nao/selected' },
@@ -1561,7 +1462,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('refreshes a missing GitLab origin HEAD and detects a non-main default branch before saving', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		runGit(fixture.seed, ['branch', 'develop']);
 		runGit(fixture.seed, ['push', fixture.bare, 'develop']);
 		runGit(fixture.root, ['--git-dir', fixture.bare, 'symbolic-ref', 'HEAD', 'refs/heads/develop']);
@@ -1584,9 +1485,9 @@ describe('context explorer worktrees', () => {
 		);
 
 		expect(result).toMatchObject({ provider: 'gitlab', defaultBranch: 'develop', branch: 'develop' });
-		expect(
-			runGit(repo.worktreeRoot, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).toString().trim(),
-		).toBe('origin/develop');
+		expect(gitOutput(repo.worktreeRoot, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).toBe(
+			'origin/develop',
+		);
 		expect(updateConfig).toHaveBeenCalledWith('project-id', {
 			repoFullName: 'nao/context',
 			repoProvider: 'gitlab',
@@ -1594,7 +1495,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('does not save the connection when the default branch refresh fails', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const context = {
 			...fixture.context,
 			configOverride: { provider: 'gitlab' as const, repoFullName: 'nao/context' },
@@ -1620,7 +1521,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('supports GitLab repositories below the setup boundary', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.configOverride = { provider: 'gitlab', repoFullName: 'nao/context' };
 		fixture.context.providerOverride = localProvider(fixture.bare, 'https://gitlab.com/nao/context.git');
 
@@ -1633,7 +1534,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('names GitLab in no-token guidance', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.configOverride = { provider: 'gitlab', repoFullName: 'nao/context' };
 		fixture.context.token = null;
 		const access = await fileAccess(fixture.context);
@@ -1648,7 +1549,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('names GitLab when its integration is unavailable', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.configOverride = { provider: 'gitlab', repoFullName: 'nao/context' };
 		fixture.context.integrationAvailableOverride = false;
 		const access = await fileAccess(fixture.context);
@@ -1662,7 +1563,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('self-heals a missing worktree', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const first = await ensureContextWorktree(fixture.context);
 		fs.rmSync(first.worktreeRoot, { recursive: true, force: true });
 
@@ -1672,7 +1573,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('repairs a missing linked worktree through the allowed management flow', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		const first = await ensureContextWorktree(fixture.context);
 		fs.rmSync(first.worktreeRoot, { recursive: true, force: true });
 
@@ -1684,9 +1585,9 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('removes a user worktree and prunes its Git registration', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		const repo = await ensureContextWorktree(fixture.context);
-		const repositoryRoot = runGit(fixture.live, ['rev-parse', '--show-toplevel']).toString().trim();
+		const repositoryRoot = gitOutput(fixture.live, ['rev-parse', '--show-toplevel']);
 
 		await cleanupContextWorktree(fixture.context.projectId, fixture.context.projectFolder, fixture.context.userId);
 
@@ -1695,7 +1596,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('falls back to deployment Git after disconnecting a cloned project', async () => {
-		const fixture = createLocalCloneFixture(temporaryRoots);
+		const fixture = createLocalCloneFixture();
 		setContextSourceEnv({
 			url: fixture.bare,
 			subpath: 'project',
@@ -1730,7 +1631,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('creates a branch and commits selected dirty files while leaving others uncommitted', async () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: test\n',
 			'context.md': 'repository content\n',
 			'other.md': 'other\n',
@@ -1763,11 +1664,9 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('uses the logged-in nao user as the commit identity', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		fixture.context.user = { name: 'Nao Account', email: 'nao-account@example.com' };
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'identity edit\n', file.hash, access);
+		await editFile(fixture.context, '/context.md', 'identity edit\n');
 
 		await createContextBranchAndCommit(fixture.context, {
 			paths: ['/context.md'],
@@ -1775,18 +1674,16 @@ describe('context explorer worktrees', () => {
 		});
 		const repo = await ensureContextWorktree(fixture.context);
 
-		expect(runGit(repo.worktreeRoot, ['log', '-1', '--format=%an <%ae>|%cn <%ce>']).toString().trim()).toBe(
+		expect(gitOutput(repo.worktreeRoot, ['log', '-1', '--format=%an <%ae>|%cn <%ce>'])).toBe(
 			'Nao Account <nao-account@example.com>|Nao Account <nao-account@example.com>',
 		);
 	});
 
 	it('rejects commits until an owned branch is checked out', async () => {
-		const fixture = createFixture(temporaryRoots);
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'default branch edit\n', file.hash, access);
+		const fixture = createFixture();
+		await editFile(fixture.context, '/context.md', 'default branch edit\n');
 		const repo = await ensureContextWorktree(fixture.context);
-		const head = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const head = headCommit(repo.worktreeRoot);
 
 		await expect(
 			commitContextChanges(fixture.context, {
@@ -1798,12 +1695,12 @@ describe('context explorer worktrees', () => {
 			message: 'Create a branch before committing context changes.',
 		});
 
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(head);
+		expect(headCommit(repo.worktreeRoot)).toBe(head);
 		expect(await getChangedContextFiles(fixture.context)).toHaveLength(1);
 	});
 
 	it('reports commits that have not been pushed to the current branch', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const before = snapshot(fixture.live);
 
 		const defaultStatus = await getContextRepositoryStatus(fixture.context);
@@ -1854,7 +1751,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('shows only the default branch and branches owned by the current user', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const repo = await ensureContextWorktree(fixture.context);
 		runGit(repo.worktreeRoot, ['update-ref', 'refs/remotes/origin/owned', 'HEAD']);
 		runGit(repo.worktreeRoot, ['update-ref', 'refs/remotes/origin/colleague', 'HEAD']);
@@ -1869,7 +1766,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('rejects switching to a branch owned by another user', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const repo = await ensureContextWorktree(fixture.context);
 		runGit(repo.worktreeRoot, ['branch', 'colleague']);
 		branchOwnershipMocks.owners.set('project-id:colleague', 'user-2');
@@ -1880,7 +1777,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('returns an unavailable status when git is unavailable or no repository is connected', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const before = snapshot(fixture.live);
 		await ensureContextWorktree(fixture.context);
 		const originalPath = process.env.PATH;
@@ -1906,7 +1803,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('reads source content as read-only when Git resolution throws', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		await ensureContextWorktree(fixture.context);
 		const originalPath = process.env.PATH;
 
@@ -1941,11 +1838,8 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('redacts credentialed URLs from Git resolution errors', async () => {
-		const fixture = createFixture(temporaryRoots);
-		const provider = fixture.context.providerOverride;
-		if (!provider) {
-			throw new Error('Expected a local provider.');
-		}
+		const fixture = createFixture();
+		const provider = fixtureProvider(fixture);
 		vi.spyOn(provider, 'authenticatedRepoUrl').mockImplementation(() => {
 			throw new Error('Clone failed for https://oauth2:SECRET@example.com/repo.git');
 		});
@@ -1969,7 +1863,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('reports line changes for tracked, untracked, and binary files without changing the live folder', async () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: test\n',
 			'context.md': 'repository content\n',
 			'binary.dat': 'plain text\n',
@@ -1989,7 +1883,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('does not count lines in oversized untracked files', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const repo = await ensureContextWorktree(fixture.context);
 		const oversizedFile = path.join(repo.worktreeRoot, 'oversized.md');
 		fs.writeFileSync(oversizedFile, '');
@@ -2002,7 +1896,7 @@ describe('context explorer worktrees', () => {
 
 	it('returns the restored hash when discarding a tracked binary file', async () => {
 		const restoredContent = Buffer.from([0, 1, 2, 3]);
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: test\n',
 			'binary.dat': restoredContent.toString(),
 		});
@@ -2017,7 +1911,7 @@ describe('context explorer worktrees', () => {
 
 	it('returns the restored hash when discarding a tracked oversized file', async () => {
 		const restoredContent = 'x'.repeat(MAX_CONTEXT_FILE_SIZE + 1);
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: test\n',
 			'oversized.md': restoredContent,
 		});
@@ -2031,7 +1925,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('does not read an untracked symlink and discards only the link', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const repo = await ensureContextWorktree(fixture.context);
 		const externalFile = path.join(fixture.root, 'external-secret.md');
 		const symlinkPath = path.join(repo.worktreeRoot, 'external-link.md');
@@ -2050,7 +1944,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('rejects discard through a symlinked parent before touching the external file', async () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: test\n',
 			'nested/context.md': 'repository content\n',
 		});
@@ -2070,19 +1964,19 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('reads modified, added, and deleted files across a historical commit range', async () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: test\n',
 			'context.md': 'old context\n',
 			'deleted.md': 'remove me\n',
 		});
 		const repo = await ensureContextWorktree(fixture.context);
-		const fromCommit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const fromCommit = headCommit(repo.worktreeRoot);
 		fs.writeFileSync(path.join(fixture.seed, 'context.md'), 'new context\nsecond line\n');
 		fs.writeFileSync(path.join(fixture.seed, 'added.md'), 'new file\n');
 		fs.rmSync(path.join(fixture.seed, 'deleted.md'));
 		commitAll(fixture.seed, 'historical changes');
 		runGit(fixture.seed, ['push', fixture.bare, 'main']);
-		const toCommit = runGit(fixture.seed, ['rev-parse', 'HEAD']).toString().trim();
+		const toCommit = headCommit(fixture.seed);
 		runGit(repo.worktreeRoot, ['fetch', fixture.bare, 'main']);
 		const range = { fromCommit, toCommit };
 
@@ -2113,23 +2007,23 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('makes a pulled feature-branch target available for an immediate local switch', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const provider = localProvider(fixture.bare, fixture.bare);
 		fixture.context.providerOverride = provider;
 		const repo = await ensureContextWorktree(fixture.context);
-		const fromCommit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const fromCommit = headCommit(repo.worktreeRoot);
 		runGit(repo.worktreeRoot, ['branch', 'review']);
 		branchOwnershipMocks.owners.set('project-id:review', 'user-1');
 		await switchContextBranch(fixture.context, 'review');
 		writeRemoteChange(fixture, 'context.md', 'latest live context\n');
-		const toCommit = runGit(fixture.seed, ['rev-parse', 'HEAD']).toString().trim();
+		const toCommit = headCommit(fixture.seed);
 		const authenticatedRepoUrl = vi.spyOn(provider, 'authenticatedRepoUrl');
 		await pullLiveContext(fixture.context);
 
 		expect(() => runGit(repo.worktreeRoot, ['cat-file', '-e', `${toCommit}^{commit}`])).not.toThrow();
-		expect(runGit(repo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('review');
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(fromCommit);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'origin/main']).toString().trim()).toBe(toCommit);
+		expect(currentBranch(repo.worktreeRoot)).toBe('review');
+		expect(headCommit(repo.worktreeRoot)).toBe(fromCommit);
+		expect(gitOutput(repo.worktreeRoot, ['rev-parse', 'origin/main'])).toBe(toCommit);
 		await expect(getHistoricalContextDiffActions(fixture.context, [{ fromCommit, toCommit }])).resolves.toEqual([
 			'switch',
 		]);
@@ -2152,9 +2046,9 @@ describe('context explorer worktrees', () => {
 			newContent: 'latest live context\n',
 		});
 
-		expect(runGit(repo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('HEAD');
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(toCommit);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'review']).toString().trim()).toBe(fromCommit);
+		expect(currentBranch(repo.worktreeRoot)).toBe('HEAD');
+		expect(headCommit(repo.worktreeRoot)).toBe(toCommit);
+		expect(gitOutput(repo.worktreeRoot, ['rev-parse', 'review'])).toBe(fromCommit);
 		await expect(getHistoricalContextDiffActions(fixture.context, [{ fromCommit, toCommit }])).resolves.toEqual([
 			'open',
 		]);
@@ -2164,11 +2058,11 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('switches locally from a feature branch when the live target is current', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const provider = localProvider(fixture.bare, fixture.bare);
 		fixture.context.providerOverride = provider;
 		const repo = await ensureContextWorktree(fixture.context);
-		const commit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const commit = headCommit(repo.worktreeRoot);
 		runGit(repo.worktreeRoot, ['branch', 'review']);
 		branchOwnershipMocks.owners.set('project-id:review', 'user-1');
 		await switchContextBranch(fixture.context, 'review');
@@ -2188,19 +2082,19 @@ describe('context explorer worktrees', () => {
 		});
 
 		expect(authenticatedRepoUrl).not.toHaveBeenCalled();
-		expect(runGit(repo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('HEAD');
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'review']).toString().trim()).toBe(commit);
+		expect(currentBranch(repo.worktreeRoot)).toBe('HEAD');
+		expect(gitOutput(repo.worktreeRoot, ['rev-parse', 'review'])).toBe(commit);
 		await expect(
 			getHistoricalContextDiffActions(fixture.context, [{ fromCommit: commit, toCommit: commit }]),
 		).resolves.toEqual(['open']);
 	});
 
 	it('keeps a dirty feature branch unchanged when preparing a historical diff', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const provider = localProvider(fixture.bare, fixture.bare);
 		fixture.context.providerOverride = provider;
 		const repo = await ensureContextWorktree(fixture.context);
-		const commit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const commit = headCommit(repo.worktreeRoot);
 		runGit(repo.worktreeRoot, ['branch', 'review']);
 		branchOwnershipMocks.owners.set('project-id:review', 'user-1');
 		await switchContextBranch(fixture.context, 'review');
@@ -2218,13 +2112,13 @@ describe('context explorer worktrees', () => {
 		});
 
 		expect(authenticatedRepoUrl).not.toHaveBeenCalled();
-		expect(runGit(repo.worktreeRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim()).toBe('review');
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'origin/main']).toString().trim()).toBe(commit);
+		expect(currentBranch(repo.worktreeRoot)).toBe('review');
+		expect(gitOutput(repo.worktreeRoot, ['rev-parse', 'origin/main'])).toBe(commit);
 		expect(fs.readFileSync(path.join(repo.worktreeRoot, 'context.md'), 'utf8')).toBe('uncommitted feature edit\n');
 	});
 
 	it('updates to the configured deployment branch', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		runGit(fixture.seed, ['switch', '-c', 'release']);
 		fs.writeFileSync(path.join(fixture.seed, 'context.md'), 'released context\n');
 		commitAll(fixture.seed, 'release context');
@@ -2237,14 +2131,14 @@ describe('context explorer worktrees', () => {
 			providerOverride: localProvider(fixture.bare, fixture.bare),
 		};
 		const repo = await ensureContextWorktree(fixture.context);
-		const fromCommit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const fromCommit = headCommit(repo.worktreeRoot);
 		runGit(repo.worktreeRoot, ['branch', 'review']);
 		branchOwnershipMocks.owners.set('project-id:review', 'user-1');
 		await switchContextBranch(fixture.context, 'review');
 		fs.writeFileSync(path.join(fixture.seed, 'context.md'), 'latest released context\n');
 		commitAll(fixture.seed, 'update release context');
 		runGit(fixture.seed, ['push', fixture.bare, 'release']);
-		const toCommit = runGit(fixture.seed, ['rev-parse', 'HEAD']).toString().trim();
+		const toCommit = headCommit(fixture.seed);
 
 		await expect(updateContextWorktree(fixture.context, [fromCommit, toCommit])).resolves.toEqual({
 			branch: 'release',
@@ -2258,14 +2152,14 @@ describe('context explorer worktrees', () => {
 			newContent: 'latest released context\n',
 		});
 
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim()).toBe(toCommit);
-		expect(runGit(repo.worktreeRoot, ['rev-parse', 'review']).toString().trim()).toBe(fromCommit);
+		expect(headCommit(repo.worktreeRoot)).toBe(toCommit);
+		expect(gitOutput(repo.worktreeRoot, ['rev-parse', 'review'])).toBe(fromCommit);
 	});
 
 	it('rejects invalid historical commits, unchanged files, and paths outside the context project', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const repo = await ensureContextWorktree(fixture.context);
-		const commit = runGit(repo.worktreeRoot, ['rev-parse', 'HEAD']).toString().trim();
+		const commit = headCommit(repo.worktreeRoot);
 
 		await expect(
 			getContextFileDiff(fixture.context, '/context.md', {
@@ -2288,10 +2182,8 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('falls back to the current HEAD when the fetched default cannot accept dirty edits', async () => {
-		const fixture = createFixture(temporaryRoots);
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'local edit\n', file.hash, access);
+		const fixture = createFixture();
+		await editFile(fixture.context, '/context.md', 'local edit\n');
 		const repo = await ensureContextWorktree(fixture.context);
 		writeRemoteChange(fixture, 'context.md', 'remote edit\n');
 
@@ -2307,10 +2199,8 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('creates a branch from the current HEAD when the fetched default cannot accept dirty edits', async () => {
-		const fixture = createFixture(temporaryRoots);
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'local edit\n', file.hash, access);
+		const fixture = createFixture();
+		await editFile(fixture.context, '/context.md', 'local edit\n');
 		const repo = await ensureContextWorktree(fixture.context);
 		writeRemoteChange(fixture, 'context.md', 'remote edit\n');
 
@@ -2325,11 +2215,11 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('releases branch ownership when branch creation fails', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const repo = await ensureContextWorktree(fixture.context);
 		const indexLockPath = path.resolve(
 			repo.worktreeRoot,
-			runGit(repo.worktreeRoot, ['rev-parse', '--git-path', 'index.lock']).toString().trim(),
+			gitOutput(repo.worktreeRoot, ['rev-parse', '--git-path', 'index.lock']),
 		);
 		fs.writeFileSync(indexLockPath, 'locked');
 
@@ -2340,10 +2230,8 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('commits selected files, then pushes and opens a pull request', async () => {
-		const fixture = createFixture(temporaryRoots);
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'pull request edit\n', file.hash, access);
+		const fixture = createFixture();
+		await editFile(fixture.context, '/context.md', 'pull request edit\n');
 
 		const commit = await createContextBranchAndCommit(fixture.context, {
 			paths: ['/context.md'],
@@ -2396,14 +2284,9 @@ describe('context explorer worktrees', () => {
 			expected: 'Unexpected git failure for [redacted]',
 		},
 	])('shows a safe message for $name', async ({ error, expected }) => {
-		const fixture = createFixture(temporaryRoots);
-		const provider = fixture.context.providerOverride;
-		if (!provider) {
-			throw new Error('Expected a local provider.');
-		}
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'failed push edit\n', file.hash, access);
+		const fixture = createFixture();
+		const provider = fixtureProvider(fixture);
+		await editFile(fixture.context, '/context.md', 'failed push edit\n');
 		await createContextBranchAndCommit(fixture.context, {
 			paths: ['/context.md'],
 			message: 'Prepare failed push',
@@ -2416,7 +2299,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('switches clean existing branches and discards one or all changed paths', async () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'nao_config.yaml': 'name: test\n',
 			'context.md': 'repository content\n',
 			'other.md': 'other\n',
@@ -2442,14 +2325,12 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('resolves a subdirectory project and never touches a same-named root file', async () => {
-		const fixture = createFixture(temporaryRoots, {
+		const fixture = createFixture({
 			'context.md': 'root context\n',
 			'analytics/nao_config.yaml': 'name: analytics\n',
 			'analytics/context.md': 'analytics repository\n',
 		});
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'analytics edit\n', file.hash, access);
+		await editFile(fixture.context, '/context.md', 'analytics edit\n');
 		const repo = await ensureContextWorktree(fixture.context);
 
 		expect(repo.projectPrefix).toBe('analytics');
@@ -2460,12 +2341,9 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('opens a pull request from branch commit messages in oldest-first order', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const before = snapshot(fixture.live);
-		const provider = fixture.context.providerOverride;
-		if (!provider) {
-			throw new Error('Expected a local provider.');
-		}
+		const provider = fixtureProvider(fixture);
 		const openReviewRequest = vi.spyOn(provider, 'openReviewRequest');
 		const access = await fileAccess(fixture.context);
 		const file = await readFileContent('/context.md', access);
@@ -2499,18 +2377,13 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('pushes commits to an existing pull request without opening another', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const before = snapshot(fixture.live);
-		const provider = fixture.context.providerOverride;
-		if (!provider) {
-			throw new Error('Expected a local provider.');
-		}
+		const provider = fixtureProvider(fixture);
 		const existingPullRequest = { kind: 'created' as const, url: 'https://github.com/nao/context/pull/7' };
 		vi.spyOn(provider, 'findOpenReviewRequest').mockResolvedValue(existingPullRequest);
 		const openReviewRequest = vi.spyOn(provider, 'openReviewRequest');
-		const access = await fileAccess(fixture.context);
-		const file = await readFileContent('/context.md', access);
-		await writeFileContent('/context.md', 'existing pull request edit\n', file.hash, access);
+		await editFile(fixture.context, '/context.md', 'existing pull request edit\n');
 		const committed = await createContextBranchAndCommit(fixture.context, {
 			paths: ['/context.md'],
 			message: 'Update existing proposal',
@@ -2530,11 +2403,8 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('reuses the stored review link after later pushes stop printing it', async () => {
-		const fixture = createFixture(temporaryRoots);
-		const provider = fixture.context.providerOverride;
-		if (!provider) {
-			throw new Error('Expected a local provider.');
-		}
+		const fixture = createFixture();
+		const provider = fixtureProvider(fixture);
 		const reviewLink = {
 			kind: 'link' as const,
 			url: 'https://git.example.com/nao/context/pullrequestcreate?source=nao/test',
@@ -2573,7 +2443,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('reports an empty branch as having nothing to push without throwing', async () => {
-		const fixture = createFixture(temporaryRoots);
+		const fixture = createFixture();
 		const before = snapshot(fixture.live);
 		await createContextBranch(fixture.context, 'nao/empty-proposal');
 
@@ -2593,7 +2463,7 @@ describe('context explorer worktrees', () => {
 			{ 'context.md': 'repository\n' },
 			{ 'one/nao_config.yaml': 'one\n', 'two/nao_config.yaml': 'two\n' },
 		]) {
-			const fixture = createFixture(temporaryRoots, files);
+			const fixture = createFixture(files);
 			const before = snapshot(fixture.live);
 			const access = await fileAccess(fixture.context);
 			const tree = await getFileTree(fixture.live);
@@ -2606,27 +2476,29 @@ describe('context explorer worktrees', () => {
 		}
 	});
 
-	it('keeps browsing available with no repo or token while refusing mutation', async () => {
-		const root = temporaryRoot(temporaryRoots);
+	it.each([
+		['no-repo', null, 'test-token'],
+		['no-token', { provider: 'github' as const, repoFullName: 'nao/context' }, null],
+	])('returns %s while preserving live browsing and refusing mutation', async (reason, configOverride, token) => {
+		const root = temporaryRoot();
 		const live = path.join(root, 'live');
 		fs.mkdirSync(live);
 		fs.writeFileSync(path.join(live, 'context.md'), 'live\n');
-		const contexts: ContextExplorerGitContext[] = [baseContext(live, null), { ...baseContext(live), token: null }];
+		const context = { ...baseContext(live, configOverride), token };
+		const access = await fileAccess(context);
+		const file = await readFileContent('/context.md', access);
 
-		for (const context of contexts) {
-			const access = await fileAccess(context);
-			const file = await readFileContent('/context.md', access);
-			expect(file.content).toBe('live\n');
-			expect(file.isEditable).toBe(false);
-			await expect(writeFileContent('/context.md', 'blocked\n', file.hash, access)).rejects.toMatchObject({
-				code: 'FORBIDDEN',
-			});
-			await expect(discardAllContextChanges(context)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-		}
+		expect(access.git).toMatchObject({ status: 'unavailable', reason });
+		expect(file.content).toBe('live\n');
+		expect(file.isEditable).toBe(false);
+		await expect(writeFileContent('/context.md', 'blocked\n', file.hash, access)).rejects.toMatchObject({
+			code: 'FORBIDDEN',
+		});
+		await expect(discardAllContextChanges(context)).rejects.toMatchObject({ code: 'FORBIDDEN' });
 	});
 
 	it('rejects every unsafe destructive target, including a repository containing the live folder', () => {
-		const root = temporaryRoot(temporaryRoots);
+		const root = temporaryRoot();
 		const live = path.join(root, 'repo', 'project');
 		fs.mkdirSync(live, { recursive: true });
 
@@ -2642,7 +2514,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('allows only worktree management commands outside the asserted worktree', () => {
-		const root = temporaryRoot(temporaryRoots);
+		const root = temporaryRoot();
 		const live = path.join(root, 'live');
 		const worktree = path.join(root, '.nao', 'worktrees', 'safe', 'user');
 
@@ -2660,7 +2532,7 @@ describe('context explorer worktrees', () => {
 	});
 
 	it('refuses every destructive operation before touching a repository containing the live folder', async () => {
-		const root = temporaryRoot(temporaryRoots);
+		const root = temporaryRoot();
 		const repository = path.join(root, 'repository');
 		const live = path.join(repository, 'project');
 		fs.mkdirSync(live, { recursive: true });
@@ -2684,83 +2556,14 @@ describe('context explorer worktrees', () => {
 		await expect(ensureContextWorktree({ ...baseContext(live), userId: '' })).rejects.toThrow('Invalid user id');
 		expect(snapshot(repository)).toEqual(before);
 	});
-
-	it.each([
-		['no-repo', null, 'token'],
-		['no-token', { provider: 'github' as const, repoFullName: 'nao/context' }, null],
-	])('returns %s while preserving live browsing', async (reason, configOverride, token) => {
-		const root = temporaryRoot(temporaryRoots);
-		const live = path.join(root, 'live');
-		fs.mkdirSync(live);
-		fs.writeFileSync(path.join(live, 'context.md'), 'live\n');
-		const context = { ...baseContext(live, configOverride), token };
-		const access = await fileAccess(context);
-
-		expect(access.git).toMatchObject({ status: 'unavailable', reason });
-		expect((await readFileContent('/context.md', access)).content).toBe('live\n');
-	});
-
-	it.each([
-		['plain repository', 'repository'],
-		['live folder', 'live'],
-		['worktrees parent', 'worktrees'],
-	])('rejects unsafe guard target: %s', (_label, targetKind) => {
-		const root = temporaryRoot(temporaryRoots);
-		const live = path.join(root, 'repository', 'project');
-		fs.mkdirSync(live, { recursive: true });
-		const target =
-			targetKind === 'live'
-				? live
-				: targetKind === 'worktrees'
-					? path.join(root, '.nao', 'worktrees')
-					: path.join(root, 'repository');
-		expect(() => assertSafeDestructiveWorktreeTarget(target, live)).toThrow();
-	});
 });
 
-interface Fixture {
-	root: string;
-	bare: string;
-	seed: string;
-	live: string;
-	context: ContextExplorerGitContext;
+function createFixture(files?: Record<string, string>): ContextGitFixture {
+	return createContextGitFixture(temporaryRoot(), files);
 }
 
-function createFixture(
-	temporaryRoots: string[],
-	files: Record<string, string> = {
-		'nao_config.yaml': 'name: test\n',
-		'context.md': 'repository content\n',
-	},
-): Fixture {
-	const root = temporaryRoot(temporaryRoots);
-	const bare = path.join(root, 'remote.git');
-	const seed = path.join(root, 'seed');
-	const live = path.join(root, 'live');
-	fs.mkdirSync(seed);
-	fs.mkdirSync(live);
-	initRepository(seed);
-	writeFiles(seed, files);
-	commitAll(seed, 'initial');
-	runGit(root, ['init', '--bare', '--quiet', '--initial-branch=main', bare]);
-	runGit(seed, ['push', bare, 'main']);
-	runGit(root, ['--git-dir', bare, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
-	fs.writeFileSync(path.join(live, 'context.md'), 'live content\n');
-	fs.writeFileSync(path.join(live, 'nao_config.yaml'), 'name: live\n');
-	return {
-		root,
-		bare,
-		seed,
-		live,
-		context: {
-			...baseContext(live),
-			providerOverride: localProvider(bare),
-		},
-	};
-}
-
-function createLocalCloneFixture(temporaryRoots: string[]): Fixture {
-	const fixture = createFixture(temporaryRoots, {
+function createLocalCloneFixture(): ContextGitFixture {
+	const fixture = createFixture({
 		'project/nao_config.yaml': 'name: test\n',
 		'project/context.md': 'repository content\n',
 	});
@@ -2775,29 +2578,33 @@ function createLocalCloneFixture(temporaryRoots: string[]): Fixture {
 	return fixture;
 }
 
-async function fileAccess(context: ContextExplorerGitContext) {
-	return {
-		projectFolder: context.projectFolder,
-		git: await resolveContextExplorerGit(context),
-	};
+/** A local clone whose `origin` is the fixture's bare repository, as in a Git-deployed live project. */
+function createBareOriginCloneFixture(): ContextGitFixture {
+	const fixture = createLocalCloneFixture();
+	runGit(fixture.live, ['remote', 'set-url', 'origin', fixture.bare]);
+	return fixture;
 }
 
-function baseContext(
-	projectFolder: string,
-	configOverride: ContextExplorerGitContext['configOverride'] = {
-		provider: 'github',
-		repoFullName: 'nao/context',
-	},
-): ContextExplorerGitContext {
-	return {
-		projectId: 'project-id',
-		projectFolder,
-		userId: 'user-1',
-		user: { name: 'Test User', email: 'test@example.com' },
-		token: 'test-token',
-		configOverride,
-		integrationAvailableOverride: true,
-	};
+function temporaryRoot(): string {
+	return createTemporaryFolder('nao-context-worktree-');
+}
+
+/** Restores the environment, the context source and the in-memory branch ownership after each test. */
+function isolateContextGitState(): void {
+	let originalEnv: typeof process.env;
+
+	beforeEach(() => {
+		originalEnv = { ...process.env };
+		contextConfigMocks.getConfig.mockResolvedValue(null);
+	});
+
+	afterEach(() => {
+		branchOwnershipMocks.owners.clear();
+		branchOwnershipMocks.reviewRequests.clear();
+		vi.clearAllMocks();
+		process.env = originalEnv;
+		__reloadEnvForTesting();
+	});
 }
 
 function setContextSourceEnv({
@@ -2848,79 +2655,45 @@ function setContextSourceEnv({
 	__reloadEnvForTesting();
 }
 
-function localProvider(bare: string, publicUrl = 'https://github.com/nao/context.git'): ContextRepositoryProvider {
-	let openReviewRequest: { kind: 'created'; url: string } | null = null;
-	return {
-		getToken: async () => 'test-token',
-		notConnectedMessage: 'Not connected.',
-		isIntegrationAvailable: () => true,
-		authenticatedRepoUrl: () => bare,
-		publicRepoUrl: () => publicUrl,
-		cloneRepo: () => undefined,
-		getGitInfo: () => ({ branch: 'main' }),
-		getUserGitIdentity: async ({ user }) => user,
-		coAuthor: { name: 'nao', email: 'naoagent@getnao.io' },
-		commitAllAndPushBranch: () => undefined,
-		pushBranch: ({ dir, branch }) => {
-			runGit(dir, ['push', bare, `HEAD:refs/heads/${branch}`]);
-			return '';
-		},
-		findOpenReviewRequest: async () => openReviewRequest,
-		findReviewRequestByBranch: async () => null,
-		openReviewRequest: async () => {
-			openReviewRequest = { kind: 'created', url: 'https://github.com/nao/context/pull/1' };
-			return openReviewRequest;
-		},
-	};
+function setProjectDeploymentEnv(fixture: ContextGitFixture): void {
+	setContextSourceEnv({ url: fixture.bare, branch: 'main', subpath: 'project', sshKey: 'deployment-key' });
 }
 
-function writeRemoteChange(fixture: Fixture, filePath: string, content: string): void {
+function installFakeGit(root: string, script: string): void {
+	const bin = path.join(root, 'bin');
+	fs.mkdirSync(bin);
+	fs.writeFileSync(path.join(bin, 'git'), script, { mode: 0o700 });
+	process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
+}
+
+function fixtureProvider(fixture: ContextGitFixture): ContextRepositoryProvider {
+	const provider = fixture.context.providerOverride;
+	if (!provider) {
+		throw new Error('Expected a local provider.');
+	}
+	return provider;
+}
+
+async function editFile(context: ContextExplorerGitContext, filePath: string, content: string): Promise<void> {
+	const access = await fileAccess(context);
+	const file = await readFileContent(filePath, access);
+	await writeFileContent(filePath, content, file.hash, access);
+}
+
+function writeRemoteChange(fixture: ContextGitFixture, filePath: string, content: string): void {
 	fs.writeFileSync(path.join(fixture.seed, filePath), content);
 	commitAll(fixture.seed, 'remote change');
 	runGit(fixture.seed, ['push', fixture.bare, 'main']);
 }
 
-function initRepository(folder: string): void {
-	runGit(folder, ['init', '--quiet', '--initial-branch=main']);
+function headCommit(dir: string): string {
+	return gitOutput(dir, ['rev-parse', 'HEAD']);
 }
 
-function commitAll(folder: string, message: string): void {
-	runGit(folder, ['add', '-A']);
-	runGit(folder, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', message]);
+function currentBranch(dir: string): string {
+	return gitOutput(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
 }
 
-function writeFiles(root: string, files: Record<string, string>): void {
-	for (const [filePath, content] of Object.entries(files)) {
-		const target = path.join(root, filePath);
-		fs.mkdirSync(path.dirname(target), { recursive: true });
-		fs.writeFileSync(target, content);
-	}
-}
-
-function temporaryRoot(temporaryRoots: string[]): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-context-worktree-'));
-	temporaryRoots.push(root);
-	return root;
-}
-
-function runGit(cwd: string, args: string[]): Buffer {
-	return execFileSync('git', args, { cwd, stdio: 'pipe', timeout: 10_000 });
-}
-
-function snapshot(root: string): Record<string, Buffer> {
-	const result: Record<string, Buffer> = {};
-	for (const entry of fs.readdirSync(root, { recursive: true, withFileTypes: true })) {
-		if (!entry.isFile()) {
-			continue;
-		}
-		const parent = entry.parentPath ?? entry.path;
-		const absolute = path.join(parent, entry.name);
-		result[path.relative(root, absolute)] = fs.readFileSync(absolute);
-	}
-	return result;
-}
-
-function expectLiveUnchanged(live: string, before: Record<string, Buffer>): void {
-	expect(snapshot(live)).toEqual(before);
-	expect(fs.existsSync(path.join(live, '.git'))).toBe(false);
+function gitOutput(cwd: string, args: string[]): string {
+	return runGit(cwd, args).toString().trim();
 }

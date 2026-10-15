@@ -70,18 +70,17 @@ describe('generic OIDC ID token verification', () => {
 			const fixture = configureOidc();
 			mocks.getIdToken.mockResolvedValue(await signToken(fixture.issuer, 'client-id', {}, '10m'));
 
+			const discoveryRequests = () =>
+				mocks.fetch.mock.calls.filter(([input]) => requestUrl(input) === fixture.discoveryUrl);
+
 			await readVerifiedOidcIdTokenClaims('user-1');
 			vi.advanceTimersByTime(5 * 60_000 - 1);
 			await readVerifiedOidcIdTokenClaims('user-1');
-			expect(mocks.fetch.mock.calls.filter(([input]) => requestUrl(input) === fixture.discoveryUrl)).toHaveLength(
-				1,
-			);
+			expect(discoveryRequests()).toHaveLength(1);
 
 			vi.advanceTimersByTime(1);
 			await readVerifiedOidcIdTokenClaims('user-1');
-			expect(mocks.fetch.mock.calls.filter(([input]) => requestUrl(input) === fixture.discoveryUrl)).toHaveLength(
-				2,
-			);
+			expect(discoveryRequests()).toHaveLength(2);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -141,13 +140,8 @@ describe('generic OIDC ID token verification', () => {
 
 describe('Microsoft ID token verification', () => {
 	it('verifies the tenant issuer, signature, and client audience', async () => {
-		const tenantId = `tenant-${++fixtureId}`;
-		const issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+		const { tenantId, issuer } = configureMicrosoft();
 		const jwksUri = `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`;
-		Object.assign(mocks.env, {
-			AZURE_AD_CLIENT_ID: 'microsoft-client',
-			AZURE_AD_TENANT_ID: tenantId,
-		});
 		mockDiscovery(`${issuer}/.well-known/openid-configuration`, issuer, jwksUri);
 		const token = await signToken(issuer, 'microsoft-client', { groups: ['group-id'] });
 
@@ -158,12 +152,7 @@ describe('Microsoft ID token verification', () => {
 	});
 
 	it('rejects discovery metadata that changes the configured tenant issuer', async () => {
-		const tenantId = `tenant-${++fixtureId}`;
-		const issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
-		Object.assign(mocks.env, {
-			AZURE_AD_CLIENT_ID: 'microsoft-client',
-			AZURE_AD_TENANT_ID: tenantId,
-		});
+		const { issuer } = configureMicrosoft();
 		mockDiscovery(
 			`${issuer}/.well-known/openid-configuration`,
 			'https://login.microsoftonline.com/another-tenant/v2.0',
@@ -207,6 +196,15 @@ function configureOidc(): { issuer: string; discoveryUrl: string; jwksUri: strin
 	return { issuer, discoveryUrl, jwksUri };
 }
 
+function configureMicrosoft(): { tenantId: string; issuer: string } {
+	const tenantId = `tenant-${++fixtureId}`;
+	Object.assign(mocks.env, {
+		AZURE_AD_CLIENT_ID: 'microsoft-client',
+		AZURE_AD_TENANT_ID: tenantId,
+	});
+	return { tenantId, issuer: `https://login.microsoftonline.com/${tenantId}/v2.0` };
+}
+
 function mockDiscovery(discoveryUrl: string, issuer: string, jwksUri: string): void {
 	mocks.fetch.mockImplementation(async (input: string | URL | Request) => {
 		const url = requestUrl(input);
@@ -230,21 +228,18 @@ function signToken(
 	claims: Record<string, unknown>,
 	expirationTime = '5m',
 ): Promise<string> {
-	return new SignJWT(claims)
-		.setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
-		.setIssuer(issuer)
-		.setAudience(audience)
-		.setIssuedAt()
-		.setExpirationTime(expirationTime)
-		.sign(privateKey);
+	return createJwt(issuer, audience, claims).setIssuedAt().setExpirationTime(expirationTime).sign(privateKey);
 }
 
 function signTokenClaims(issuer: string, audience: string, claims: Record<string, unknown>): Promise<string> {
+	return createJwt(issuer, audience, claims).sign(privateKey);
+}
+
+function createJwt(issuer: string, audience: string, claims: Record<string, unknown>): SignJWT {
 	return new SignJWT(claims)
 		.setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
 		.setIssuer(issuer)
-		.setAudience(audience)
-		.sign(privateKey);
+		.setAudience(audience);
 }
 
 function unsignedToken(claims: Record<string, unknown>): string {

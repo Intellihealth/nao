@@ -5,24 +5,13 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { findConfigLlmProvider, readProjectConfigLlm } from '../../src/utils/nao-config-llm';
+import { useNaoConfigProjects } from '../helpers/nao-config-project';
 
-vi.mock('../../src/utils/logger', () => ({
-	logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-}));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 
-const dirs: string[] = [];
-
-function writeConfig(lines: string[]): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-config-llm-'));
-	dirs.push(dir);
-	fs.writeFileSync(path.join(dir, 'nao_config.yaml'), lines.join('\n'));
-	return dir;
-}
+const writeConfig = useNaoConfigProjects('nao-config-llm-');
 
 afterEach(() => {
-	while (dirs.length > 0) {
-		fs.rmSync(dirs.pop() as string, { force: true, recursive: true });
-	}
 	delete process.env.TEST_OPENAI_KEY;
 });
 

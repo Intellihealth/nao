@@ -22,7 +22,7 @@ vi.mock('../../src/utils/llm', () => ({
 	getProjectConfigLlm: vi.fn(async () => null),
 	getProjectDeclaredModels: vi.fn(),
 }));
-vi.mock('../../src/utils/logger', () => ({ logger: { error: vi.fn() } }));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 vi.mock('../../src/utils/member-budget', () => ({ resolveMemberBudgetUsage: mocks.resolveMemberBudgetUsage }));
 
 import { assertBudgetNotExceeded } from '../../src/utils/budget';

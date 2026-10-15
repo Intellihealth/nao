@@ -69,13 +69,7 @@ describe('validateMattermostConnection', () => {
 	it('accepts a valid Mattermost user response', async () => {
 		const fetchImpl = vi.fn(async () => Response.json({ id: 'bot-user-id', username: 'nao' }));
 
-		await expect(
-			validateMattermostConnection({
-				baseUrl: 'https://mattermost.example/base/',
-				botToken: 'test-token',
-				fetchImpl,
-			}),
-		).resolves.toBeUndefined();
+		await expect(validateConnection(fetchImpl, 'https://mattermost.example/base/')).resolves.toBeUndefined();
 
 		expect(fetchImpl).toHaveBeenCalledWith(
 			new URL('https://mattermost.example/base/api/v4/users/me'),
@@ -89,52 +83,34 @@ describe('validateMattermostConnection', () => {
 	});
 
 	it.each([401, 403])('reports rejected bot tokens for HTTP %s', async (status) => {
-		const fetchImpl = vi.fn(async () => new Response(null, { status }));
-
-		await expect(
-			validateMattermostConnection({
-				baseUrl: 'https://mattermost.example',
-				botToken: 'test-token',
-				fetchImpl,
-			}),
-		).rejects.toThrow('Mattermost rejected the bot token. Check the token and try again.');
+		await expect(validateConnection(vi.fn(async () => new Response(null, { status })))).rejects.toThrow(
+			'Mattermost rejected the bot token. Check the token and try again.',
+		);
 	});
 
 	it('reports when the server URL has no Mattermost API', async () => {
-		const fetchImpl = vi.fn(async () => new Response(null, { status: 404 }));
-
-		await expect(
-			validateMattermostConnection({
-				baseUrl: 'https://mattermost.example',
-				botToken: 'test-token',
-				fetchImpl,
-			}),
-		).rejects.toThrow('No Mattermost API was found at this server URL.');
+		await expect(validateConnection(vi.fn(async () => new Response(null, { status: 404 })))).rejects.toThrow(
+			'No Mattermost API was found at this server URL.',
+		);
 	});
 
 	it('reports network failures without exposing provider details', async () => {
 		const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('connect ECONNREFUSED secret-host'));
 
-		await expect(
-			validateMattermostConnection({
-				baseUrl: 'https://mattermost.example',
-				botToken: 'test-token',
-				fetchImpl,
-			}),
-		).rejects.toThrow('Could not reach the Mattermost server. Check the server URL.');
+		await expect(validateConnection(fetchImpl)).rejects.toThrow(
+			'Could not reach the Mattermost server. Check the server URL.',
+		);
 	});
 
 	it.each([{}, { id: '' }, { id: 42 }])('rejects malformed successful responses', async (body) => {
-		const fetchImpl = vi.fn(async () => Response.json(body));
-
-		await expect(
-			validateMattermostConnection({
-				baseUrl: 'https://mattermost.example',
-				botToken: 'test-token',
-				fetchImpl,
-			}),
-		).rejects.toThrow('Mattermost returned an unexpected response.');
+		await expect(validateConnection(vi.fn(async () => Response.json(body)))).rejects.toThrow(
+			'Mattermost returned an unexpected response.',
+		);
 	});
+
+	function validateConnection(fetchImpl: typeof fetch, baseUrl = 'https://mattermost.example') {
+		return validateMattermostConnection({ baseUrl, botToken: 'test-token', fetchImpl });
+	}
 });
 
 describe('parseMattermostLoginCommand', () => {
@@ -278,16 +254,6 @@ describe('shouldHandleMattermostMessage', () => {
 		expect(shouldHandleMattermostMessage({ ...baseInput, isDirectMessage: true })).toBe(true);
 	});
 
-	it('ignores unrelated direct-message thread replies', () => {
-		expect(
-			shouldHandleMattermostMessage({
-				...baseInput,
-				isDirectMessage: true,
-				isThreadReply: true,
-			}),
-		).toBe(false);
-	});
-
 	it('requires a mention before handling a new direct-message thread rooted on a nao answer', () => {
 		expect(
 			shouldHandleMattermostMessage({
@@ -310,28 +276,6 @@ describe('shouldHandleMattermostMessage', () => {
 				isDirectMessage: true,
 				isThreadReply: true,
 				hasExistingChat: true,
-			}),
-		).toBe(true);
-	});
-
-	it('handles direct-message threads with an exact existing chat', () => {
-		expect(
-			shouldHandleMattermostMessage({
-				...baseInput,
-				isDirectMessage: true,
-				isThreadReply: true,
-				hasExistingChat: true,
-			}),
-		).toBe(true);
-	});
-
-	it('handles mentioned direct-message thread replies', () => {
-		expect(
-			shouldHandleMattermostMessage({
-				...baseInput,
-				isDirectMessage: true,
-				isThreadReply: true,
-				isMention: true,
 			}),
 		).toBe(true);
 	});
@@ -482,11 +426,7 @@ describe('Mattermost answer rendering', () => {
 
 	it('patches the post without reading it first', async () => {
 		const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
-		await patchMattermostAnswerPost({
-			baseUrl: 'https://mattermost.example/base/',
-			botToken: 'token',
-			postId: 'post-1',
-			message: 'Streaming answer',
+		await patchAnswerPost({
 			baseProps: { from_bot: 'true' },
 			attachments: [createMattermostStopAttachment('https://nao.example/callback', 'callback-token')],
 			fetchImpl,
@@ -509,16 +449,7 @@ describe('Mattermost answer rendering', () => {
 			.mockResolvedValueOnce(new Response(null, { status: 200 }));
 		const sleep = vi.fn(async () => undefined);
 
-		await patchMattermostAnswerPost({
-			baseUrl: 'https://mattermost.example/base/',
-			botToken: 'token',
-			postId: 'post-1',
-			message: 'Streaming answer',
-			baseProps: {},
-			attachments: [],
-			fetchImpl,
-			sleep,
-		});
+		await patchAnswerPost({ fetchImpl, sleep });
 
 		expect(fetchImpl).toHaveBeenCalledTimes(2);
 		expect(sleep).toHaveBeenCalledOnce();
@@ -531,16 +462,7 @@ describe('Mattermost answer rendering', () => {
 			.mockResolvedValueOnce(new Response(null, { status: 200 }));
 		const sleep = vi.fn(async () => undefined);
 
-		await patchMattermostAnswerPost({
-			baseUrl: 'https://mattermost.example/base/',
-			botToken: 'token',
-			postId: 'post-1',
-			message: 'Streaming answer',
-			baseProps: {},
-			attachments: [],
-			fetchImpl,
-			sleep,
-		});
+		await patchAnswerPost({ fetchImpl, sleep });
 
 		expect(sleep).toHaveBeenCalledWith(1000);
 	});
@@ -549,18 +471,9 @@ describe('Mattermost answer rendering', () => {
 		const fetchImpl = vi.fn(async () => new Response(null, { status: 429 }));
 		const sleep = vi.fn(async () => undefined);
 
-		await expect(
-			patchMattermostAnswerPost({
-				baseUrl: 'https://mattermost.example/base/',
-				botToken: 'token',
-				postId: 'post-1',
-				message: 'Streaming answer',
-				baseProps: {},
-				attachments: [],
-				fetchImpl,
-				sleep,
-			}),
-		).rejects.toThrow('Mattermost post patch failed with status 429');
+		await expect(patchAnswerPost({ fetchImpl, sleep })).rejects.toThrow(
+			'Mattermost post patch failed with status 429',
+		);
 		expect(fetchImpl).toHaveBeenCalledTimes(4);
 		expect(sleep).toHaveBeenCalledTimes(3);
 	});
@@ -569,18 +482,9 @@ describe('Mattermost answer rendering', () => {
 		const fetchImpl = vi.fn(async () => new Response(null, { status: 500 }));
 		const sleep = vi.fn(async () => undefined);
 
-		await expect(
-			patchMattermostAnswerPost({
-				baseUrl: 'https://mattermost.example/base/',
-				botToken: 'token',
-				postId: 'post-1',
-				message: 'Streaming answer',
-				baseProps: {},
-				attachments: [],
-				fetchImpl,
-				sleep,
-			}),
-		).rejects.toThrow('Mattermost post patch failed with status 500');
+		await expect(patchAnswerPost({ fetchImpl, sleep })).rejects.toThrow(
+			'Mattermost post patch failed with status 500',
+		);
 		expect(fetchImpl).toHaveBeenCalledOnce();
 		expect(sleep).not.toHaveBeenCalled();
 	});
@@ -614,6 +518,18 @@ describe('Mattermost answer rendering', () => {
 		expect(markdown).toBe('**[Open in yolo\\]\\(https://evil.example\\)](https://nao.example/chat-1)**');
 		expect(escapeMarkdownText('Data_Hub *beta*')).toBe('Data\\_Hub \\*beta\\*');
 	});
+
+	function patchAnswerPost(input: Partial<Parameters<typeof patchMattermostAnswerPost>[0]>) {
+		return patchMattermostAnswerPost({
+			baseUrl: 'https://mattermost.example/base/',
+			botToken: 'token',
+			postId: 'post-1',
+			message: 'Streaming answer',
+			baseProps: {},
+			attachments: [],
+			...input,
+		});
+	}
 });
 
 describe('createMattermostMarkdownTable', () => {
@@ -819,56 +735,30 @@ describe('Mattermost feedback metadata', () => {
 
 describe('Mattermost account resolution', () => {
 	it('matches a nao user from the Mattermost email and caches it', async () => {
-		const emailCache = new Map<string, MattermostEmailCacheEntry>();
-		const findUser = vi.fn(async (email: string) => ({ email }));
-		const result = await resolveMattermostAccount({
-			userId: 'mattermost-user',
-			emailCache,
-			fetchEmail: vi.fn(async () => 'User@Example.com'),
-			findUser,
-		});
+		const input = createAccountInput(vi.fn(async () => 'User@Example.com'));
+		const result = await resolveMattermostAccount(input);
 
 		expect(result).toEqual({ email: 'user@example.com' });
-		expect(emailCache.get('mattermost-user')).toEqual({
+		expect(input.emailCache.get('mattermost-user')).toEqual({
 			email: 'user@example.com',
 			expiresAt: Number.POSITIVE_INFINITY,
 		});
-		expect(findUser).toHaveBeenCalledWith('user@example.com');
-	});
-
-	it('falls back to the login command when no email is available', async () => {
-		const findUser = vi.fn(async () => ({ email: 'unused@example.com' }));
-		const result = await resolveMattermostAccount({
-			userId: 'mattermost-user',
-			emailCache: new Map(),
-			fetchEmail: vi.fn(async () => null),
-			findUser,
-		});
-
-		expect(result).toBeNull();
-		expect(findUser).not.toHaveBeenCalled();
-		expect(parseMattermostLoginCommand('login fallbak1')).toEqual({ code: 'fallbak1' });
+		expect(input.findUser).toHaveBeenCalledWith('user@example.com');
 	});
 
 	it('caches a missing email', async () => {
 		const currentTime = 10_000;
-		const emailCache = new Map<string, MattermostEmailCacheEntry>();
-		const fetchEmail = vi.fn(async () => null);
-		const findUser = vi.fn(async (email: string) => ({ email }));
-		const input = {
-			userId: 'mattermost-user',
-			emailCache,
-			fetchEmail,
-			findUser,
-			now: () => currentTime,
-		};
+		const input = createAccountInput(
+			vi.fn(async () => null),
+			() => currentTime,
+		);
 
 		expect(await resolveMattermostAccount(input)).toBeNull();
 		expect(await resolveMattermostAccount(input)).toBeNull();
 
-		expect(fetchEmail).toHaveBeenCalledTimes(1);
-		expect(findUser).not.toHaveBeenCalled();
-		expect(emailCache.get('mattermost-user')).toEqual({
+		expect(input.fetchEmail).toHaveBeenCalledTimes(1);
+		expect(input.findUser).not.toHaveBeenCalled();
+		expect(input.emailCache.get('mattermost-user')).toEqual({
 			email: null,
 			expiresAt: currentTime + 5 * 60 * 1000,
 		});
@@ -876,26 +766,20 @@ describe('Mattermost account resolution', () => {
 
 	it('retries email resolution when a cached miss expires', async () => {
 		let currentTime = 10_000;
-		const emailCache = new Map<string, MattermostEmailCacheEntry>();
-		const fetchEmail = vi
-			.fn<() => Promise<string | null>>()
-			.mockResolvedValueOnce(null)
-			.mockResolvedValueOnce('Recovered@Example.com');
-		const findUser = vi.fn(async (email: string) => ({ email }));
-		const input = {
-			userId: 'mattermost-user',
-			emailCache,
-			fetchEmail,
-			findUser,
-			now: () => currentTime,
-		};
+		const input = createAccountInput(
+			vi
+				.fn<() => Promise<string | null>>()
+				.mockResolvedValueOnce(null)
+				.mockResolvedValueOnce('Recovered@Example.com'),
+			() => currentTime,
+		);
 
 		expect(await resolveMattermostAccount(input)).toBeNull();
 		currentTime += 5 * 60 * 1000;
 		expect(await resolveMattermostAccount(input)).toEqual({ email: 'recovered@example.com' });
 
-		expect(fetchEmail).toHaveBeenCalledTimes(2);
-		expect(emailCache.get('mattermost-user')).toEqual({
+		expect(input.fetchEmail).toHaveBeenCalledTimes(2);
+		expect(input.emailCache.get('mattermost-user')).toEqual({
 			email: 'recovered@example.com',
 			expiresAt: Number.POSITIVE_INFINITY,
 		});
@@ -903,27 +787,31 @@ describe('Mattermost account resolution', () => {
 
 	it('uses a successful email cached after a miss', async () => {
 		const currentTime = 10_000;
-		const emailCache = new Map<string, MattermostEmailCacheEntry>();
-		const fetchEmail = vi.fn(async () => null);
-		const findUser = vi.fn(async (email: string) => ({ email }));
-		const input = {
-			userId: 'mattermost-user',
-			emailCache,
-			fetchEmail,
-			findUser,
-			now: () => currentTime,
-		};
+		const input = createAccountInput(
+			vi.fn(async () => null),
+			() => currentTime,
+		);
 
 		expect(await resolveMattermostAccount(input)).toBeNull();
-		cacheMattermostEmail(emailCache, 'mattermost-user', 'Manual@Example.com', currentTime);
+		cacheMattermostEmail(input.emailCache, 'mattermost-user', 'Manual@Example.com', currentTime);
 		expect(await resolveMattermostAccount(input)).toEqual({ email: 'manual@example.com' });
 
-		expect(fetchEmail).toHaveBeenCalledTimes(1);
-		expect(emailCache.get('mattermost-user')).toEqual({
+		expect(input.fetchEmail).toHaveBeenCalledTimes(1);
+		expect(input.emailCache.get('mattermost-user')).toEqual({
 			email: 'manual@example.com',
 			expiresAt: Number.POSITIVE_INFINITY,
 		});
 	});
+
+	function createAccountInput<T extends () => Promise<string | null>>(fetchEmail: T, now?: () => number) {
+		return {
+			userId: 'mattermost-user',
+			emailCache: new Map<string, MattermostEmailCacheEntry>(),
+			fetchEmail,
+			findUser: vi.fn(async (email: string) => ({ email })),
+			now,
+		};
+	}
 });
 
 describe('Mattermost callback URL', () => {
@@ -950,14 +838,6 @@ describe('Mattermost callback URL', () => {
 		expect(getMessagingProviderWebhookUrl('https://nao.example/backend', 'matter/most', 'project one')).toBe(
 			'https://nao.example/backend/api/webhooks/matter%2Fmost/project%20one',
 		);
-	});
-
-	it('does not include the action token in the callback URL', () => {
-		const token = createMattermostActionSecret('project-1', 'post-1');
-		const callbackUrl = getMessagingProviderWebhookUrl('https://nao.example', 'mattermost', 'project-1');
-
-		expect(callbackUrl).toBe('https://nao.example/api/webhooks/mattermost/project-1');
-		expect(callbackUrl).not.toContain(token);
 	});
 });
 

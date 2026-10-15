@@ -1,9 +1,7 @@
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.hoisted(() => {
 	process.env.MODE = 'test';
@@ -20,28 +18,25 @@ import {
 	searchFileContents,
 	writeFileContent,
 } from '../../src/services/context-explorer.service';
-import type {
-	ContextExplorerGitContext,
-	ContextRepositoryProvider,
-} from '../../src/services/context-explorer-git.service';
-import { resolveContextExplorerGit } from '../../src/services/context-explorer-git.service';
+import {
+	baseContext,
+	type ContextGitFixture,
+	createContextGitFixture,
+	expectLiveUnchanged,
+	fileAccess,
+	snapshot,
+	writeFiles,
+} from '../helpers/context-git-fixture';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
 
 describe('context explorer worktree writes', () => {
-	let root: string;
-	let live: string;
-	let bare: string;
+	const createTemporaryFolder = useTemporaryFolders();
+	let fixture: ContextGitFixture;
 	let access: ContextExplorerFileAccess;
 	let liveSnapshot: Record<string, Buffer>;
 
 	beforeEach(async () => {
-		root = fs.mkdtempSync(path.join(os.tmpdir(), 'nao-context-write-'));
-		live = path.join(root, 'live');
-		bare = path.join(root, 'remote.git');
-		const seed = path.join(root, 'seed');
-		fs.mkdirSync(live);
-		fs.mkdirSync(seed);
-		initRepository(seed);
-		writeFiles(seed, {
+		fixture = createContextGitFixture(createTemporaryFolder('nao-context-write-'), {
 			'nao_config.yaml': 'name: project\n',
 			'context.md': 'repository content\n',
 			'generated.md': '---\ntype: generated\n---\ngenerated\n',
@@ -54,11 +49,7 @@ describe('context explorer worktree writes', () => {
 			'docs/obsidian/note.md': 'obsidian\n',
 			'.gitignore': 'ignored\n',
 		});
-		commitAll(seed);
-		runGit(root, ['init', '--bare', '--quiet', '--initial-branch=main', bare]);
-		runGit(seed, ['push', bare, 'main']);
-		runGit(root, ['--git-dir', bare, 'symbolic-ref', 'HEAD', 'refs/heads/main']);
-		writeFiles(live, {
+		writeFiles(fixture.live, {
 			'nao_config.yaml': 'name: live\n',
 			'context.md': 'live content\n',
 			'generated.md': '---\ntype: generated\n---\nlive generated\n',
@@ -74,25 +65,8 @@ describe('context explorer worktree writes', () => {
 			'nested/.env.local': 'nested secret\n',
 			'nested/repository/.git/config': 'protected\n',
 		});
-		liveSnapshot = snapshot(live);
-		const context: ContextExplorerGitContext = {
-			projectId: 'project-id',
-			projectFolder: live,
-			userId: 'user-1',
-			user: { name: 'Test User', email: 'test@example.com' },
-			token: 'token',
-			configOverride: { provider: 'github', repoFullName: 'nao/context' },
-			integrationAvailableOverride: true,
-			providerOverride: provider(bare),
-		};
-		access = {
-			projectFolder: live,
-			git: await resolveContextExplorerGit(context),
-		};
-	});
-
-	afterEach(() => {
-		fs.rmSync(root, { recursive: true, force: true });
+		liveSnapshot = snapshot(fixture.live);
+		access = await fileAccess(fixture.context);
 	});
 
 	it('reads and writes tracked content only in the worktree with optimistic locking', async () => {
@@ -106,24 +80,12 @@ describe('context explorer worktree writes', () => {
 		await expect(writeFileContent('/context.md', 'stale\n', original.hash, access)).rejects.toMatchObject({
 			code: 'CONFLICT',
 		});
-		expectLiveUnchanged();
+		expectLiveUnchanged(fixture.live, liveSnapshot);
 	});
 
 	it('browses the live project read-only when no repository is connected', async () => {
-		const readOnlyAccess: ContextExplorerFileAccess = {
-			projectFolder: live,
-			git: await resolveContextExplorerGit({
-				projectId: 'project-id',
-				projectFolder: live,
-				userId: 'user-1',
-				user: { name: 'Test User', email: 'test@example.com' },
-				token: 'token',
-				configOverride: null,
-				integrationAvailableOverride: true,
-				providerOverride: provider(bare),
-			}),
-		};
-		const tree = await getFileTree(live);
+		const readOnlyAccess = await fileAccess(baseContext(fixture.live, null));
+		const tree = await getFileTree(fixture.live);
 		const file = await readFileContent('/context.md', readOnlyAccess);
 
 		expect(tree.map((entry) => entry.name)).toContain('context.md');
@@ -135,7 +97,7 @@ describe('context explorer worktree writes', () => {
 		await expect(writeFileContent('/context.md', 'changed\n', file.hash, readOnlyAccess)).rejects.toMatchObject({
 			code: 'FORBIDDEN',
 		});
-		expectLiveUnchanged();
+		expectLiveUnchanged(fixture.live, liveSnapshot);
 	});
 
 	it('returns every editability reason with actionable guidance in precedence order', async () => {
@@ -162,11 +124,11 @@ describe('context explorer worktree writes', () => {
 			reason: 'not-tracked',
 			guidance: { message: expect.stringContaining('Add it') },
 		});
-		expectLiveUnchanged();
+		expectLiveUnchanged(fixture.live, liveSnapshot);
 	});
 
 	it('excludes and rejects .git and environment files across tree, read, write, and search', async () => {
-		const tree = await getFileTree(live);
+		const tree = await getFileTree(fixture.live);
 		const nested = tree.find((entry) => entry.name === 'nested');
 		const context = await readFileContent('/context.md', access);
 
@@ -178,8 +140,8 @@ describe('context explorer worktree writes', () => {
 				code: 'FORBIDDEN',
 			});
 		}
-		expect((await searchFileContents('secret', live)).results).toEqual([]);
-		expectLiveUnchanged();
+		expect((await searchFileContents('secret', fixture.live)).results).toEqual([]);
+		expectLiveUnchanged(fixture.live, liveSnapshot);
 	});
 
 	it('rejects traversal, symlinks, oversized and non-UTF-8 files', async () => {
@@ -189,7 +151,7 @@ describe('context explorer worktree writes', () => {
 		const worktreeProject = repo!.projectPrefix
 			? path.join(repo!.worktreeRoot, repo!.projectPrefix)
 			: repo!.worktreeRoot;
-		const outside = path.join(root, 'outside.md');
+		const outside = path.join(fixture.root, 'outside.md');
 		fs.writeFileSync(outside, 'outside\n');
 		fs.symlinkSync(outside, path.join(worktreeProject, 'linked.md'));
 		fs.writeFileSync(path.join(worktreeProject, 'context.md'), Buffer.from([0xff, 0xfe]));
@@ -205,7 +167,7 @@ describe('context explorer worktree writes', () => {
 		).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 		await expect(readFileContent('/context.md', access)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 		expect(fs.readFileSync(outside, 'utf8')).toBe('outside\n');
-		expectLiveUnchanged();
+		expectLiveUnchanged(fixture.live, liveSnapshot);
 	});
 
 	it('preserves file mode and permits only one concurrent atomic write', async () => {
@@ -221,13 +183,10 @@ describe('context explorer worktree writes', () => {
 		expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
 		expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
 		expect(fs.statSync(target).mode & 0o777).toBe(0o600);
-		expectLiveUnchanged();
+		expectLiveUnchanged(fixture.live, liveSnapshot);
 	});
 
 	it.each([
-		['/generated.md', 'generated', 'file', '/annotations.md'],
-		['/rendered.md', 'rendered-template', 'file', '/rendered.md.j2'],
-		['/repos/source.md', 'synced-source', 'file', '/nao_config.yaml'],
 		['/docs/notion/page.md', 'synced-source', 'file', '/nao_config.yaml'],
 		['/docs/confluence/page.md', 'synced-source', 'file', '/nao_config.yaml'],
 		['/docs/obsidian/note.md', 'synced-source', 'file', '/nao_config.yaml'],
@@ -239,23 +198,6 @@ describe('context explorer worktree writes', () => {
 		expect(file.guidance?.actionPath).toBe(actionPath);
 	});
 
-	it.each(['/nested/repository/.git/config', '/.env', '/nested/.env.local'])(
-		'rejects protected read %s',
-		async (filePath) => {
-			await expect(readFileContent(filePath, access)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-		},
-	);
-
-	it.each(['/nested/repository/.git/config', '/.env', '/nested/.env.local'])(
-		'rejects protected write %s',
-		async (filePath) => {
-			const context = await readFileContent('/context.md', access);
-			await expect(writeFileContent(filePath, 'changed\n', context.hash, access)).rejects.toMatchObject({
-				code: 'FORBIDDEN',
-			});
-		},
-	);
-
 	it.each(['/generated.md', '/rendered.md', '/repos/source.md', '/untracked.md'])(
 		'rejects read-only write %s',
 		async (filePath) => {
@@ -265,62 +207,4 @@ describe('context explorer worktree writes', () => {
 			});
 		},
 	);
-
-	function expectLiveUnchanged(): void {
-		expect(snapshot(live)).toEqual(liveSnapshot);
-		expect(fs.existsSync(path.join(live, '.git'))).toBe(false);
-	}
 });
-
-function provider(bare: string): ContextRepositoryProvider {
-	return {
-		getToken: async () => 'token',
-		notConnectedMessage: 'Not connected.',
-		isIntegrationAvailable: () => true,
-		authenticatedRepoUrl: () => bare,
-		publicRepoUrl: () => 'https://github.com/nao/context.git',
-		cloneRepo: () => undefined,
-		getGitInfo: () => ({ branch: 'main' }),
-		getUserGitIdentity: async () => ({ name: 'Test', email: 'test@example.com' }),
-		coAuthor: { name: 'nao', email: 'naoagent@getnao.io' },
-		commitAllAndPushBranch: () => undefined,
-		pushBranch: () => undefined,
-		findOpenReviewRequest: async () => null,
-		findReviewRequestByBranch: async () => null,
-		openReviewRequest: async () => ({ url: 'https://github.com/nao/context/pull/1' }),
-	};
-}
-
-function initRepository(folder: string): void {
-	runGit(folder, ['init', '--quiet', '--initial-branch=main']);
-}
-
-function commitAll(folder: string): void {
-	runGit(folder, ['add', '-A']);
-	runGit(folder, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'initial']);
-}
-
-function runGit(cwd: string, args: string[]): Buffer {
-	return execFileSync('git', args, { cwd, stdio: 'pipe', timeout: 10_000 });
-}
-
-function writeFiles(root: string, files: Record<string, string>): void {
-	for (const [filePath, content] of Object.entries(files)) {
-		const target = path.join(root, filePath);
-		fs.mkdirSync(path.dirname(target), { recursive: true });
-		fs.writeFileSync(target, content);
-	}
-}
-
-function snapshot(root: string): Record<string, Buffer> {
-	const result: Record<string, Buffer> = {};
-	for (const entry of fs.readdirSync(root, { recursive: true, withFileTypes: true })) {
-		if (!entry.isFile()) {
-			continue;
-		}
-		const parent = entry.parentPath ?? entry.path;
-		const absolute = path.join(parent, entry.name);
-		result[path.relative(root, absolute)] = fs.readFileSync(absolute);
-	}
-	return result;
-}

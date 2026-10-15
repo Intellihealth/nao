@@ -1,3 +1,4 @@
+import type { Tool } from 'ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderAutomationRunPrompt } from '../../src/components/ai/automation-run-prompt';
@@ -29,33 +30,14 @@ vi.mock('../../src/services/slack', () => ({
 
 import { createAutomationTools } from '../../src/services/automation-tools';
 import { slackService } from '../../src/services/slack';
+import { createToolContext, executeTool } from '../helpers/tool-context';
+
+type ChartArtifact = ToolContext['generatedArtifacts']['charts'][number];
+type SlackMessageInput = { text: string; thread_id?: string };
+type SlackMessageOutput = { ok: boolean; threadId?: string; attachments?: string[]; attachmentError?: string };
 
 const CHANNEL_ID = 'C123';
 const ROOT_THREAD_ID = `slack:${CHANNEL_ID}:111.222`;
-
-function slackIntegrations(): AutomationIntegrationConfig {
-	return { slack: { enabled: true, channelId: CHANNEL_ID } };
-}
-
-function emptyContext(): ToolContext {
-	return {
-		projectFolder: '/tmp',
-		chatId: 'chat-1',
-		userId: 'user-1',
-		projectId: 'project-1',
-		supportsCustomCharts: false,
-		agentSettings: null,
-		envVars: {},
-		azureAccessToken: null,
-		queryResults: new Map(),
-		generatedArtifacts: { charts: [], maps: [], stories: [] },
-	};
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function runTool(tool: any, input: Record<string, unknown>, context: ToolContext) {
-	return tool.execute(input, { experimental_context: context, toolCallId: 'call-1', messages: [] });
-}
 
 describe('renderAutomationRunPrompt slack threading guidance', () => {
 	it('includes the threading structure when slack is enabled', () => {
@@ -89,17 +71,9 @@ describe('send_automation_slack_message threading', () => {
 		vi.mocked(slackService.postMessage)
 			.mockResolvedValueOnce({ channel: CHANNEL_ID, ts: '111.222', threadId: ROOT_THREAD_ID })
 			.mockResolvedValueOnce({ channel: CHANNEL_ID, ts: '333.444', threadId: ROOT_THREAD_ID });
+		const sendSlackMessage = createSendSlackMessage(createToolContext());
 
-		const tools = createAutomationTools({
-			projectId: 'project-1',
-			chatId: 'chat-1',
-			githubToken: null,
-			integrations: slackIntegrations(),
-		});
-		const tool = tools.send_automation_slack_message;
-		const context = emptyContext();
-
-		const headline = await runTool(tool, { text: 'Weekly Report: see thread' }, context);
+		const headline = await sendSlackMessage({ text: 'Weekly Report: see thread' });
 		expect(headline).toMatchObject({ ok: true, threadId: ROOT_THREAD_ID });
 		expect(vi.mocked(slackService.postMessage).mock.calls[0]).toEqual([
 			'project-1',
@@ -108,7 +82,7 @@ describe('send_automation_slack_message threading', () => {
 			{ chatId: 'chat-1', threadId: undefined },
 		]);
 
-		await runTool(tool, { text: 'Full report body', thread_id: headline.threadId }, context);
+		await sendSlackMessage({ text: 'Full report body', thread_id: headline.threadId });
 		expect(vi.mocked(slackService.postMessage).mock.calls[1]).toEqual([
 			'project-1',
 			CHANNEL_ID,
@@ -118,28 +92,13 @@ describe('send_automation_slack_message threading', () => {
 	});
 
 	it('uploads each generated chart only once across multiple thread messages', async () => {
-		vi.mocked(slackService.postMessage).mockResolvedValue({
-			channel: CHANNEL_ID,
-			ts: '111.222',
-			threadId: ROOT_THREAD_ID,
-		});
+		mockPostMessageInRootThread();
+		const sendSlackMessage = createSendSlackMessage(contextWithCharts([chart('Revenue', 'q1')]));
 
-		const tools = createAutomationTools({
-			projectId: 'project-1',
-			chatId: 'chat-1',
-			githubToken: null,
-			integrations: slackIntegrations(),
-		});
-		const tool = tools.send_automation_slack_message;
-		const context = emptyContext();
-		context.generatedArtifacts.charts = [
-			{ type: 'bar', title: 'Revenue', query_id: 'q1' } as ToolContext['generatedArtifacts']['charts'][number],
-		];
-
-		const first = await runTool(tool, { text: 'Headline' }, context);
+		const first = await sendSlackMessage({ text: 'Headline' });
 		expect(first.attachments).toEqual(['revenue.png']);
 
-		const second = await runTool(tool, { text: 'Body', thread_id: ROOT_THREAD_ID }, context);
+		const second = await sendSlackMessage({ text: 'Body', thread_id: ROOT_THREAD_ID });
 		expect(second.attachments).toEqual([]);
 
 		const uploadedFiles = vi.mocked(slackService.uploadFiles).mock.calls.flatMap((call) => call[2]);
@@ -148,26 +107,11 @@ describe('send_automation_slack_message threading', () => {
 	});
 
 	it('keeps the delivered message successful and retries failed attachments', async () => {
-		vi.mocked(slackService.postMessage).mockResolvedValue({
-			channel: CHANNEL_ID,
-			ts: '111.222',
-			threadId: ROOT_THREAD_ID,
-		});
+		mockPostMessageInRootThread();
 		vi.mocked(slackService.uploadFiles).mockRejectedValueOnce(new Error('not_in_channel'));
+		const sendSlackMessage = createSendSlackMessage(contextWithCharts([chart('Revenue', 'q1')]));
 
-		const tools = createAutomationTools({
-			projectId: 'project-1',
-			chatId: 'chat-1',
-			githubToken: null,
-			integrations: slackIntegrations(),
-		});
-		const tool = tools.send_automation_slack_message;
-		const context = emptyContext();
-		context.generatedArtifacts.charts = [
-			{ type: 'bar', title: 'Revenue', query_id: 'q1' } as ToolContext['generatedArtifacts']['charts'][number],
-		];
-
-		const failedUpload = await runTool(tool, { text: 'Headline' }, context);
+		const failedUpload = await sendSlackMessage({ text: 'Headline' });
 		expect(failedUpload).toMatchObject({
 			ok: true,
 			threadId: ROOT_THREAD_ID,
@@ -175,7 +119,7 @@ describe('send_automation_slack_message threading', () => {
 			attachmentError: 'Files could not be uploaded: not_in_channel',
 		});
 
-		const retry = await runTool(tool, { text: 'Body', thread_id: ROOT_THREAD_ID }, context);
+		const retry = await sendSlackMessage({ text: 'Body', thread_id: ROOT_THREAD_ID });
 		expect(retry).toMatchObject({
 			ok: true,
 			threadId: ROOT_THREAD_ID,
@@ -185,29 +129,15 @@ describe('send_automation_slack_message threading', () => {
 	});
 
 	it('preserves successful uploads when a later attachment fails', async () => {
-		vi.mocked(slackService.postMessage).mockResolvedValue({
-			channel: CHANNEL_ID,
-			ts: '111.222',
-			threadId: ROOT_THREAD_ID,
-		});
+		mockPostMessageInRootThread();
 		vi.mocked(slackService.uploadFiles)
 			.mockResolvedValueOnce(undefined)
 			.mockRejectedValueOnce(new Error('upload_failed'));
+		const sendSlackMessage = createSendSlackMessage(
+			contextWithCharts([chart('Revenue', 'q1'), chart('Expenses', 'q2')]),
+		);
 
-		const tools = createAutomationTools({
-			projectId: 'project-1',
-			chatId: 'chat-1',
-			githubToken: null,
-			integrations: slackIntegrations(),
-		});
-		const tool = tools.send_automation_slack_message;
-		const context = emptyContext();
-		context.generatedArtifacts.charts = [
-			{ type: 'bar', title: 'Revenue', query_id: 'q1' } as ToolContext['generatedArtifacts']['charts'][number],
-			{ type: 'bar', title: 'Expenses', query_id: 'q2' } as ToolContext['generatedArtifacts']['charts'][number],
-		];
-
-		const partialUpload = await runTool(tool, { text: 'Headline' }, context);
+		const partialUpload = await sendSlackMessage({ text: 'Headline' });
 		expect(partialUpload).toMatchObject({
 			ok: true,
 			threadId: ROOT_THREAD_ID,
@@ -215,7 +145,7 @@ describe('send_automation_slack_message threading', () => {
 			attachmentError: 'Files could not be uploaded: upload_failed',
 		});
 
-		const retry = await runTool(tool, { text: 'Body', thread_id: ROOT_THREAD_ID }, context);
+		const retry = await sendSlackMessage({ text: 'Body', thread_id: ROOT_THREAD_ID });
 		expect(retry).toMatchObject({
 			ok: true,
 			threadId: ROOT_THREAD_ID,
@@ -226,3 +156,33 @@ describe('send_automation_slack_message threading', () => {
 		).toEqual([['revenue.png'], ['expenses.png'], ['expenses.png']]);
 	});
 });
+
+function slackIntegrations(): AutomationIntegrationConfig {
+	return { slack: { enabled: true, channelId: CHANNEL_ID } };
+}
+
+function createSendSlackMessage(context: ToolContext) {
+	const tool = createAutomationTools({
+		projectId: 'project-1',
+		chatId: 'chat-1',
+		githubToken: null,
+		integrations: slackIntegrations(),
+	}).send_automation_slack_message as Tool<SlackMessageInput, SlackMessageOutput>;
+	return (input: SlackMessageInput) => executeTool(tool, input, context);
+}
+
+function mockPostMessageInRootThread(): void {
+	vi.mocked(slackService.postMessage).mockResolvedValue({
+		channel: CHANNEL_ID,
+		ts: '111.222',
+		threadId: ROOT_THREAD_ID,
+	});
+}
+
+function contextWithCharts(charts: ChartArtifact[]): ToolContext {
+	return createToolContext({ generatedArtifacts: { charts, maps: [], stories: [] } });
+}
+
+function chart(title: string, queryId: string): ChartArtifact {
+	return { type: 'bar', title, query_id: queryId } as ChartArtifact;
+}

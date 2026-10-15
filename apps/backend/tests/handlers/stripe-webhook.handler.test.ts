@@ -37,6 +37,8 @@ vi.mock('../../src/services/stripe.service', () => ({
 import { stripeWebhookProcessHandler } from '../../src/handlers/stripe-webhook.handler';
 
 const CHECKOUT_EVENT_TYPES = ['checkout.session.completed', 'checkout.session.async_payment_succeeded'] as const;
+const CLOUD_SUBSCRIPTION = { id: 'sub_cloud', customer: 'cus_cloud', metadata: { nao_org_id: 'org-id' } };
+const RECONCILED_CLOUD_CUSTOMER = { stripeCustomerId: 'cus_cloud', organizationIdHint: 'org-id' };
 
 describe('stripeWebhookProcessHandler', () => {
 	beforeEach(() => {
@@ -55,9 +57,7 @@ describe('stripeWebhookProcessHandler', () => {
 	it('rejects a job whose inbox event is missing', async () => {
 		mocks.getInboxEvent.mockResolvedValue(null);
 
-		await expect(stripeWebhookProcessHandler({ eventId: 'evt_missing' }, {} as never)).rejects.toThrow(
-			'Stripe webhook event "evt_missing" was not found',
-		);
+		await expect(processEvent('evt_missing')).rejects.toThrow('Stripe webhook event "evt_missing" was not found');
 
 		expect(mocks.getEvent).not.toHaveBeenCalled();
 		expect(mocks.markFailed).not.toHaveBeenCalled();
@@ -67,103 +67,45 @@ describe('stripeWebhookProcessHandler', () => {
 	it('does not process an inbox event twice', async () => {
 		mocks.getInboxEvent.mockResolvedValue({ id: 'evt_123', processedAt: new Date() });
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
 		expect(mocks.getEvent).not.toHaveBeenCalled();
 		expect(mocks.reconcileCustomer).not.toHaveBeenCalled();
 	});
 
 	it.each(CHECKOUT_EVENT_TYPES)('reconciles subscription state after %s', async (eventType) => {
-		const subscription = {
-			id: 'sub_cloud',
-			customer: 'cus_cloud',
-			metadata: { nao_org_id: 'org-id' },
-			status: 'trialing',
-		};
-		mocks.getEvent.mockResolvedValue({
-			type: eventType,
-			data: { object: { id: 'cs_cloud', mode: 'subscription', metadata: { nao_plan_key: 'cloud_monthly_v2' } } },
-		});
-		mocks.getCheckoutSubscription.mockResolvedValue({
-			session: {
-				id: 'cs_cloud',
-				client_reference_id: 'org-id',
-				customer: 'cus_cloud',
-				metadata: { nao_org_id: 'org-id', nao_plan_key: 'cloud_monthly_v2' },
-				mode: 'subscription',
-			},
-			subscription,
-		});
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		mocks.getEvent.mockResolvedValue({ type: eventType, data: { object: checkoutSession() } });
+		mockCheckoutSubscription({ subscription: { ...CLOUD_SUBSCRIPTION, status: 'trialing' } });
+		await processEvent('evt_123');
 
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_123');
 	});
 
 	it('reconciles a yearly subscription Checkout', async () => {
 		mocks.getEvent.mockResolvedValue({
 			type: 'checkout.session.completed',
-			data: {
-				object: {
-					id: 'cs_yearly',
-					mode: 'subscription',
-					metadata: { nao_plan_key: 'cloud_yearly_v1' },
-				},
-			},
+			data: { object: checkoutSession('cs_yearly', 'cloud_yearly_v1') },
 		});
-		mocks.getCheckoutSubscription.mockResolvedValue({
-			session: {
-				id: 'cs_yearly',
-				client_reference_id: 'org-id',
-				customer: 'cus_cloud',
-				metadata: { nao_org_id: 'org-id', nao_plan_key: 'cloud_yearly_v1' },
-				mode: 'subscription',
-			},
-			subscription: {
-				id: 'sub_yearly',
-				customer: 'cus_cloud',
-				metadata: { nao_org_id: 'org-id' },
-			},
+		mockCheckoutSubscription({
+			sessionId: 'cs_yearly',
+			planKey: 'cloud_yearly_v1',
+			subscription: { ...CLOUD_SUBSCRIPTION, id: 'sub_yearly' },
 		});
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 	});
 
 	it('rejects a Checkout Session whose Customer differs from its Subscription', async () => {
-		mocks.getEvent.mockResolvedValue({
-			type: 'checkout.session.completed',
-			data: {
-				object: {
-					id: 'cs_cloud',
-					mode: 'subscription',
-					metadata: { nao_plan_key: 'cloud_monthly_v2' },
-				},
-			},
-		});
-		mocks.getCheckoutSubscription.mockResolvedValue({
-			session: {
-				id: 'cs_cloud',
-				client_reference_id: 'org-id',
-				customer: 'cus_session',
-				metadata: { nao_org_id: 'org-id', nao_plan_key: 'cloud_monthly_v2' },
-				mode: 'subscription',
-			},
-			subscription: {
-				id: 'sub_cloud',
-				customer: 'cus_subscription',
-				metadata: { nao_org_id: 'org-id' },
-			},
+		mocks.getEvent.mockResolvedValue({ type: 'checkout.session.completed', data: { object: checkoutSession() } });
+		mockCheckoutSubscription({
+			sessionCustomer: 'cus_session',
+			subscription: { ...CLOUD_SUBSCRIPTION, customer: 'cus_subscription' },
 		});
 
-		await expect(stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never)).rejects.toThrow(
+		await expect(processEvent('evt_123')).rejects.toThrow(
 			'Stripe Checkout Session "cs_cloud" has an unexpected Customer',
 		);
 
@@ -184,18 +126,14 @@ describe('stripeWebhookProcessHandler', () => {
 			data: { object: session },
 		});
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
 		expect(mocks.getCheckoutSubscription).not.toHaveBeenCalled();
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_123');
 	});
 
 	it('reconciles subscription events by Customer', async () => {
-		mocks.findSubscription.mockResolvedValue({
-			id: 'sub_cloud',
-			customer: 'cus_cloud',
-			metadata: { nao_org_id: 'org-id' },
-		});
+		mocks.findSubscription.mockResolvedValue(CLOUD_SUBSCRIPTION);
 		mocks.getEvent.mockResolvedValue({
 			type: 'customer.subscription.updated',
 			data: {
@@ -205,170 +143,85 @@ describe('stripeWebhookProcessHandler', () => {
 			},
 		});
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_123');
 	});
 
 	it('reconciles from the stored object ID when the Stripe Event has expired', async () => {
-		mocks.getInboxEvent.mockResolvedValue({
-			id: 'evt_expired',
-			type: 'customer.subscription.updated',
-			stripeObjectId: 'sub_cloud',
-			processedAt: null,
-		});
-		mocks.getEvent.mockRejectedValue({ statusCode: 404 });
-		mocks.findSubscription.mockResolvedValue({
-			id: 'sub_cloud',
-			customer: 'cus_cloud',
-			metadata: { nao_org_id: 'org-id' },
-		});
+		mockExpiredEvent('customer.subscription.updated', 'sub_cloud');
+		mocks.findSubscription.mockResolvedValue(CLOUD_SUBSCRIPTION);
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_expired' }, {} as never);
+		await processEvent('evt_expired');
 
 		expect(mocks.findSubscription).toHaveBeenCalledWith('sub_cloud');
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_expired');
 	});
 
 	it.each(CHECKOUT_EVENT_TYPES)('reconciles an expired %s event from its stored Session ID', async (eventType) => {
-		mocks.getInboxEvent.mockResolvedValue({
-			id: 'evt_expired',
-			type: eventType,
-			stripeObjectId: 'cs_cloud',
-			processedAt: null,
-		});
-		mocks.getEvent.mockRejectedValue({ statusCode: 404 });
-		mocks.getCheckoutSession.mockResolvedValue({
-			id: 'cs_cloud',
-			mode: 'subscription',
-			metadata: { nao_plan_key: 'cloud_monthly_v2' },
-		});
-		mocks.getCheckoutSubscription.mockResolvedValue({
-			session: {
-				id: 'cs_cloud',
-				client_reference_id: 'org-id',
-				customer: 'cus_cloud',
-				metadata: { nao_org_id: 'org-id', nao_plan_key: 'cloud_monthly_v2' },
-				mode: 'subscription',
-			},
-			subscription: {
-				id: 'sub_cloud',
-				customer: 'cus_cloud',
-				metadata: { nao_org_id: 'org-id' },
-			},
-		});
+		mockExpiredEvent(eventType, 'cs_cloud');
+		mocks.getCheckoutSession.mockResolvedValue(checkoutSession());
+		mockCheckoutSubscription();
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_expired' }, {} as never);
+		await processEvent('evt_expired');
 
 		expect(mocks.getCheckoutSession).toHaveBeenCalledWith('cs_cloud');
 		expect(mocks.getCheckoutSubscription).toHaveBeenCalledWith('cs_cloud');
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 	});
 
 	it('reconciles an expired invoice event from its stored Invoice ID', async () => {
-		mocks.getInboxEvent.mockResolvedValue({
-			id: 'evt_expired',
-			type: 'invoice.paid',
-			stripeObjectId: 'in_cloud',
-			processedAt: null,
-		});
-		mocks.getEvent.mockRejectedValue({ statusCode: 404 });
+		mockExpiredEvent('invoice.paid', 'in_cloud');
 		mocks.getInvoice.mockResolvedValue({
 			id: 'in_cloud',
 			customer: 'cus_cloud',
 			parent: { subscription_details: { subscription: 'sub_cloud' } },
 		});
-		mocks.findSubscription.mockResolvedValue({
-			id: 'sub_cloud',
-			customer: 'cus_cloud',
-			metadata: { nao_org_id: 'org-id' },
-		});
+		mocks.findSubscription.mockResolvedValue(CLOUD_SUBSCRIPTION);
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_expired' }, {} as never);
+		await processEvent('evt_expired');
 
 		expect(mocks.getInvoice).toHaveBeenCalledWith('in_cloud');
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 	});
 
 	it('scans mapped Customers for an expired PaymentMethod event with no current Customer', async () => {
-		mocks.getInboxEvent.mockResolvedValue({
-			id: 'evt_expired',
-			type: 'payment_method.updated',
-			stripeObjectId: 'pm_cloud',
-			processedAt: null,
-		});
-		mocks.getEvent.mockRejectedValue({ statusCode: 404 });
+		mockExpiredEvent('payment_method.updated', 'pm_cloud');
 		mocks.getPaymentMethod.mockResolvedValue({ id: 'pm_cloud', customer: null });
 		mocks.listMappedOrganizations.mockResolvedValue([{ orgId: 'org-id', stripeCustomerId: 'cus_cloud' }]);
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_expired' }, {} as never);
+		await processEvent('evt_expired');
 
 		expect(mocks.getPaymentMethod).toHaveBeenCalledWith('pm_cloud');
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 	});
 
 	it('reconciles an expired customer.updated event from its stored Customer ID', async () => {
-		mocks.getInboxEvent.mockResolvedValue({
-			id: 'evt_expired',
-			type: 'customer.updated',
-			stripeObjectId: 'cus_cloud',
-			processedAt: null,
-		});
-		mocks.getEvent.mockRejectedValue({ statusCode: 404 });
+		mockExpiredEvent('customer.updated', 'cus_cloud');
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_expired' }, {} as never);
+		await processEvent('evt_expired');
 
 		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({ stripeCustomerId: 'cus_cloud' });
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_expired');
 	});
 
 	it('scans mapped Customers for an expired payment_method.detached event', async () => {
-		mocks.getInboxEvent.mockResolvedValue({
-			id: 'evt_expired',
-			type: 'payment_method.detached',
-			stripeObjectId: 'pm_detached',
-			processedAt: null,
-		});
-		mocks.getEvent.mockRejectedValue({ statusCode: 404 });
+		mockExpiredEvent('payment_method.detached', 'pm_detached');
 		mocks.listMappedOrganizations.mockResolvedValue([{ orgId: 'org-id', stripeCustomerId: 'cus_cloud' }]);
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_expired' }, {} as never);
+		await processEvent('evt_expired');
 
 		expect(mocks.getPaymentMethod).not.toHaveBeenCalled();
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_expired');
 	});
 
 	it('rejects a reconcilable stored event with no object ID', async () => {
-		mocks.getInboxEvent.mockResolvedValue({
-			id: 'evt_expired',
-			type: 'invoice.paid',
-			stripeObjectId: null,
-			processedAt: null,
-		});
-		mocks.getEvent.mockRejectedValue({ statusCode: 404 });
+		mockExpiredEvent('invoice.paid', null);
 
-		await expect(stripeWebhookProcessHandler({ eventId: 'evt_expired' }, {} as never)).rejects.toThrow(
+		await expect(processEvent('evt_expired')).rejects.toThrow(
 			'Stored Stripe event "invoice.paid" has no object ID',
 		);
 
@@ -383,7 +236,7 @@ describe('stripeWebhookProcessHandler', () => {
 		const error = new Error('Stripe is unavailable');
 		mocks.getEvent.mockRejectedValue(error);
 
-		await expect(stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never)).rejects.toBe(error);
+		await expect(processEvent('evt_123')).rejects.toBe(error);
 
 		expect(mocks.findSubscription).not.toHaveBeenCalled();
 		expect(mocks.markFailed).toHaveBeenCalledWith('evt_123', 'Stripe is unavailable');
@@ -426,18 +279,14 @@ describe('stripeWebhookProcessHandler', () => {
 		mocks.findSubscription.mockResolvedValue(null);
 		mocks.getEvent.mockResolvedValue(event);
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
 		expect(mocks.reconcileCustomer).not.toHaveBeenCalled();
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_123');
 	});
 
 	it('reconciles invoice events without a Customer from the validated subscription', async () => {
-		mocks.findSubscription.mockResolvedValue({
-			id: 'sub_cloud',
-			customer: 'cus_cloud',
-			metadata: { nao_org_id: 'org-id' },
-		});
+		mocks.findSubscription.mockResolvedValue(CLOUD_SUBSCRIPTION);
 		mocks.getEvent.mockResolvedValue({
 			type: 'invoice.paid',
 			data: {
@@ -453,12 +302,9 @@ describe('stripeWebhookProcessHandler', () => {
 			},
 		});
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
-		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({
-			stripeCustomerId: 'cus_cloud',
-			organizationIdHint: 'org-id',
-		});
+		expect(mocks.reconcileCustomer).toHaveBeenCalledWith(RECONCILED_CLOUD_CUSTOMER);
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_123');
 	});
 
@@ -467,7 +313,7 @@ describe('stripeWebhookProcessHandler', () => {
 			type: 'customer.updated',
 			data: { object: { id: 'cus_cloud' } },
 		});
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
 		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({ stripeCustomerId: 'cus_cloud' });
 		expect(mocks.markProcessed).toHaveBeenCalledWith('evt_123');
@@ -483,7 +329,7 @@ describe('stripeWebhookProcessHandler', () => {
 			{ orgId: 'org-two', stripeCustomerId: 'cus_two' },
 		]);
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
 		expect(mocks.reconcileCustomer).toHaveBeenNthCalledWith(1, {
 			stripeCustomerId: 'cus_one',
@@ -507,7 +353,7 @@ describe('stripeWebhookProcessHandler', () => {
 		]);
 		mocks.reconcileCustomer.mockRejectedValueOnce(new Error('org-one unavailable'));
 
-		await expect(stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never)).rejects.toThrow(
+		await expect(processEvent('evt_123')).rejects.toThrow(
 			'Reconciliation failed for 1 organization(s): org-one: org-one unavailable',
 		);
 
@@ -528,7 +374,7 @@ describe('stripeWebhookProcessHandler', () => {
 			},
 		});
 
-		await stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never);
+		await processEvent('evt_123');
 
 		expect(mocks.reconcileCustomer).toHaveBeenCalledWith({ stripeCustomerId: 'cus_cloud' });
 		expect(mocks.listMappedOrganizations).not.toHaveBeenCalled();
@@ -543,9 +389,41 @@ describe('stripeWebhookProcessHandler', () => {
 		});
 		mocks.reconcileCustomer.mockRejectedValue(error);
 
-		await expect(stripeWebhookProcessHandler({ eventId: 'evt_123' }, {} as never)).rejects.toBe(error);
+		await expect(processEvent('evt_123')).rejects.toBe(error);
 
 		expect(mocks.markFailed).toHaveBeenCalledWith('evt_123', 'reconciliation failed');
 		expect(mocks.markProcessed).not.toHaveBeenCalled();
 	});
 });
+
+function processEvent(eventId: string) {
+	return stripeWebhookProcessHandler({ eventId }, {} as never);
+}
+
+/** Stored inbox event whose Stripe Event can no longer be retrieved. */
+function mockExpiredEvent(type: string, stripeObjectId: string | null) {
+	mocks.getInboxEvent.mockResolvedValue({ id: 'evt_expired', type, stripeObjectId, processedAt: null });
+	mocks.getEvent.mockRejectedValue({ statusCode: 404 });
+}
+
+function checkoutSession(id = 'cs_cloud', planKey = 'cloud_monthly_v2') {
+	return { id, mode: 'subscription', metadata: { nao_plan_key: planKey } };
+}
+
+function mockCheckoutSubscription({
+	sessionId = 'cs_cloud',
+	planKey = 'cloud_monthly_v2',
+	sessionCustomer = 'cus_cloud',
+	subscription = CLOUD_SUBSCRIPTION as Record<string, unknown>,
+} = {}) {
+	mocks.getCheckoutSubscription.mockResolvedValue({
+		session: {
+			id: sessionId,
+			client_reference_id: 'org-id',
+			customer: sessionCustomer,
+			metadata: { nao_org_id: 'org-id', nao_plan_key: planKey },
+			mode: 'subscription',
+		},
+		subscription,
+	});
+}

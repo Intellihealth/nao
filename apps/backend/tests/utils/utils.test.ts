@@ -77,20 +77,13 @@ describe('formatErrorMessageForUI', () => {
 });
 
 describe('truncateMiddle', () => {
-	it('returns the string unchanged when shorter than maxLength', () => {
-		expect(truncateMiddle('hello', 10)).toBe('hello');
-	});
-
-	it('truncates the middle of a long string', () => {
-		expect(truncateMiddle('abcdefghij', 7)).toBe('ab...ij');
-	});
-
-	it('slices without ellipsis when maxLength <= ellipsis length', () => {
-		expect(truncateMiddle('abcdef', 3)).toBe('abc');
-	});
-
-	it('uses a custom ellipsis string', () => {
-		expect(truncateMiddle('abcdefghij', 8, '--')).toBe('abc--hij');
+	it.each([
+		['returns the string unchanged when shorter than maxLength', 'hello', 10, undefined, 'hello'],
+		['truncates the middle of a long string', 'abcdefghij', 7, undefined, 'ab...ij'],
+		['slices without ellipsis when maxLength <= ellipsis length', 'abcdef', 3, undefined, 'abc'],
+		['uses a custom ellipsis string', 'abcdefghij', 8, '--', 'abc--hij'],
+	])('%s', (_name, value, maxLength, ellipsis, expected) => {
+		expect(truncateMiddle(value, maxLength, ellipsis)).toBe(expected);
 	});
 });
 

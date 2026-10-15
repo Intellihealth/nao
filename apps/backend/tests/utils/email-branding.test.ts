@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/env', () => ({ env: { BETTER_AUTH_URL: 'https://app.example' } }));
-vi.mock('../../src/utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 vi.mock('../../src/services/branding.service', () => ({
 	DEFAULT_APP_NAME: 'nao',
 	DEFAULT_BRAND_COLOR: '#522bff',

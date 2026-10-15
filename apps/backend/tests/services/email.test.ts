@@ -14,9 +14,7 @@ vi.mock('nodemailer', () => ({
 	default: { createTransport },
 }));
 
-vi.mock('../../src/utils/logger', () => ({
-	logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../../src/utils/logger', () => import('../helpers/logger-mock'));
 
 function setSmtpEnv(overrides: Record<string, string | undefined> = {}): void {
 	mockEnv.SMTP_HOST = 'smtp.example.com';

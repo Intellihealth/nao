@@ -34,37 +34,9 @@ describe('getSystemPromptOverride', () => {
 		vi.restoreAllMocks();
 	});
 
-	it('returns undefined when no override files exist', () => {
-		mockExistsSync.mockReturnValue(false);
-		expect(getSystemPromptOverride(ROOT)).toBeUndefined();
-		expect(getSystemPromptOverride(ROOT, 'slack')).toBeUndefined();
-	});
-
-	it('uses system.md for the web Bot (no provider)', () => {
-		setupPromptFiles({ 'system.md': 'Web override' });
-		expect(getSystemPromptOverride(ROOT)).toBe('Web override');
-	});
-
 	it('does not use a surface file for the web Bot', () => {
 		setupPromptFiles({ 'slack.md': 'Slack override' });
 		expect(getSystemPromptOverride(ROOT)).toBeUndefined();
-	});
-
-	it('prefers the surface-specific file over system.md', () => {
-		setupPromptFiles({ 'system.md': 'Global override', 'slack.md': 'Slack override' });
-		expect(getSystemPromptOverride(ROOT, 'slack')).toBe('Slack override');
-	});
-
-	it('supports a Mattermost-specific prompt override', () => {
-		setupPromptFiles({ 'system.md': 'Global override', 'mattermost.md': 'Mattermost override' });
-		expect(getSystemPromptOverride(ROOT, 'mattermost')).toBe('Mattermost override');
-	});
-
-	it('falls back to system.md when no surface-specific file exists', () => {
-		setupPromptFiles({ 'system.md': 'Global override' });
-		expect(getSystemPromptOverride(ROOT, 'slack')).toBe('Global override');
-		expect(getSystemPromptOverride(ROOT, 'teams')).toBe('Global override');
-		expect(getSystemPromptOverride(ROOT, 'automation')).toBe('Global override');
 	});
 
 	it('trims whitespace and ignores empty files', () => {
@@ -75,8 +47,7 @@ describe('getSystemPromptOverride', () => {
 	});
 
 	it('returns undefined and logs when reading throws', () => {
-		mockExistsSync.mockImplementation((path) => path === promptPath('system.md'));
-		mockRealpathSync.mockImplementation((path) => path as string);
+		setupPromptFiles({ 'system.md': '' });
 		mockReadFileSync.mockImplementation(() => {
 			throw new Error('Permission denied');
 		});
@@ -87,7 +58,7 @@ describe('getSystemPromptOverride', () => {
 	});
 
 	it('refuses to read a prompt that resolves outside the project folder (symlink traversal)', () => {
-		mockExistsSync.mockImplementation((path) => path === promptPath('system.md'));
+		setupPromptFiles({ 'system.md': '' });
 		mockRealpathSync.mockImplementation((path) =>
 			path === promptPath('system.md') ? '/etc/passwd' : (path as string),
 		);

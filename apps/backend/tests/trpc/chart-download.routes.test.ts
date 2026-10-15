@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const mocks = vi.hoisted(() => ({
 	getChartOwnerInfo: vi.fn(),
 	getDisplayConfigByToolCallId: vi.fn(),
@@ -36,6 +38,7 @@ import { router } from '../../src/trpc/trpc';
 
 const testRouter = router(chartRoutes);
 const CALLER_ID = 'attacker-id';
+const caller = createTestCaller(testRouter, { userId: CALLER_ID, selectedProjectId: 'attacker-project' });
 const CHART_CONFIG = {
 	chart_type: 'bar',
 	query_id: 'query-1',
@@ -62,7 +65,7 @@ describe('chart.download', () => {
 	it("refuses a chart from a chat the caller can't open", async () => {
 		mocks.canUserViewChatContent.mockResolvedValue(false);
 
-		await expect(createCaller().download({ toolCallId: 'victim-tool-call' })).rejects.toMatchObject({
+		await expect(caller.download({ toolCallId: 'victim-tool-call' })).rejects.toMatchObject({
 			code: 'NOT_FOUND',
 		});
 		expect(mocks.canUserViewChatContent).toHaveBeenCalledWith('victim-chat', 'victim-project', CALLER_ID);
@@ -74,7 +77,7 @@ describe('chart.download', () => {
 		mocks.canUserViewChatContent.mockResolvedValue(true);
 		mocks.getExecuteSqlPartByQueryIdInChat.mockResolvedValue(null);
 
-		await expect(createCaller().download({ toolCallId: 'own-tool-call' })).rejects.toMatchObject({
+		await expect(caller.download({ toolCallId: 'own-tool-call' })).rejects.toMatchObject({
 			code: 'NOT_FOUND',
 		});
 		expect(mocks.getExecuteSqlPartByQueryIdInChat).toHaveBeenCalledWith('victim-chat', 'query-1');
@@ -84,7 +87,7 @@ describe('chart.download', () => {
 	it('renders a chart the caller can view from its own chat data', async () => {
 		mocks.canUserViewChatContent.mockResolvedValue(true);
 
-		await expect(createCaller().download({ toolCallId: 'own-tool-call' })).resolves.toBe(
+		await expect(caller.download({ toolCallId: 'own-tool-call' })).resolves.toBe(
 			Buffer.from('png').toString('base64'),
 		);
 		expect(mocks.generateChartImage).toHaveBeenCalledWith(
@@ -92,10 +95,3 @@ describe('chart.download', () => {
 		);
 	});
 });
-
-function createCaller() {
-	return testRouter.createCaller({
-		session: { user: { id: CALLER_ID, name: 'Attacker', email: 'attacker@example.com' } },
-		selectedProjectId: 'attacker-project',
-	} as never);
-}

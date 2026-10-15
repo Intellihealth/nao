@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+	mockLockingSelectQuery,
+	mockMutationQuery,
+	mockSelectQuery,
+	recordEvent,
+} from '../helpers/postgres-query-builder-mocks';
+
 const mocks = vi.hoisted(() => ({
 	events: [] as string[],
 	mappingRows: [] as Array<{
@@ -18,18 +25,21 @@ const mocks = vi.hoisted(() => ({
 	beforeProjectLock: vi.fn<() => void | Promise<void>>(),
 }));
 
-vi.mock('../../src/db/dbConfig', () => ({
-	Dialect: { Postgres: 'postgres', Sqlite: 'sqlite' },
-	default: { dialect: 'postgres' },
-}));
+vi.mock(
+	'../../src/db/dbConfig',
+	async () => (await import('../helpers/postgres-query-builder-mocks')).postgresDbConfigMock,
+);
 
-vi.mock('../../src/db/db', () => ({
-	db: {
-		select: (selection: Record<string, unknown>) =>
-			'projectMemberUserId' in selection ? query(mocks.mappingRows) : query([]),
-		transaction: async (operation: (transaction: unknown) => Promise<void>) => operation(transaction()),
-	},
-}));
+vi.mock('../../src/db/db', async () => {
+	const { mockSelectQuery: mockQuery } = await import('../helpers/postgres-query-builder-mocks');
+	return {
+		db: {
+			select: (selection: Record<string, unknown>) =>
+				'projectMemberUserId' in selection ? mockQuery(mocks.mappingRows) : mockQuery([]),
+			transaction: async (operation: (transaction: unknown) => Promise<void>) => operation(transaction()),
+		},
+	};
+});
 
 import {
 	hasSsoUserGroupSyncState,
@@ -148,46 +158,35 @@ function transaction() {
 	return {
 		select: (selection: Record<string, unknown>) => {
 			if ('projectMemberUserId' in selection) {
-				return query(mocks.mappingRows, () => mocks.events.push('read-mappings'));
+				return mockSelectQuery(mocks.mappingRows, recordEvent(mocks.events, 'read-mappings'));
 			}
 			if ('projectId' in selection) {
-				return query(mocks.existingProviderProjectRows, () => mocks.events.push('read-existing-projects'));
+				return mockSelectQuery(
+					mocks.existingProviderProjectRows,
+					recordEvent(mocks.events, 'read-existing-projects'),
+				);
 			}
 			if ('groupId' in selection) {
-				return query(mocks.existingGroupRows, () => mocks.events.push('read-memberships'));
+				return mockSelectQuery(mocks.existingGroupRows, recordEvent(mocks.events, 'read-memberships'));
 			}
 			lockSelectionCount += 1;
 			if (lockSelectionCount === 1) {
-				return lockingQuery([{ id: 'user-1' }], async () => {
-					mocks.events.push('lock-user');
-				});
+				return mockLockingSelectQuery([{ id: 'user-1' }], recordEvent(mocks.events, 'lock-user'));
 			}
 			return lockingProjectQuery(async () => {
 				await mocks.beforeProjectLock();
 				mocks.events.push('lock-projects');
 			});
 		},
-		delete: () => mutation(),
-		insert: () => mutation(() => mocks.events.push('insert-membership')),
+		delete: () => mockMutationQuery(),
+		insert: () => mockMutationQuery({ beforeExecute: recordEvent(mocks.events, 'insert-membership') }),
 	};
 }
 
-function lockingProjectQuery(beforeExecute: () => Promise<void>) {
-	const builder = lockingQuery([], beforeExecute);
+function lockingProjectQuery(onLock: () => Promise<void>) {
+	const builder = mockLockingSelectQuery([], onLock);
 	builder.where = (condition: unknown) => {
 		mocks.lockedProjectIds = getInArrayValues(condition);
-		return builder;
-	};
-	return builder;
-}
-
-function lockingQuery(rows: unknown[], beforeExecute: () => Promise<void>) {
-	const builder = query(rows);
-	builder.for = () => {
-		builder.execute = vi.fn(async () => {
-			await beforeExecute();
-			return rows;
-		});
 		return builder;
 	};
 	return builder;
@@ -197,35 +196,6 @@ function getInArrayValues(condition: unknown): string[] {
 	const chunks = (condition as { queryChunks?: unknown[] }).queryChunks ?? [];
 	const parameters = chunks.find((chunk): chunk is Array<{ value?: unknown }> => Array.isArray(chunk)) ?? [];
 	return parameters.flatMap((parameter) => (typeof parameter.value === 'string' ? [parameter.value] : []));
-}
-
-function query(rows: unknown[], beforeExecute?: () => void) {
-	const builder = {
-		from: () => builder,
-		innerJoin: () => builder,
-		leftJoin: () => builder,
-		where: () => builder,
-		orderBy: () => builder,
-		limit: () => builder,
-		for: (_strength: string) => builder,
-		execute: vi.fn(async () => {
-			beforeExecute?.();
-			return rows;
-		}),
-	};
-	return builder;
-}
-
-function mutation(beforeExecute?: () => void) {
-	const builder = {
-		values: () => builder,
-		where: () => builder,
-		onConflictDoNothing: () => builder,
-		execute: vi.fn(async () => {
-			beforeExecute?.();
-		}),
-	};
-	return builder;
 }
 
 function ssoMappings(oidc: string[]) {

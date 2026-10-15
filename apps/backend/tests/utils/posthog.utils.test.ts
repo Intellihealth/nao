@@ -3,10 +3,10 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { persistPostHogId } from '../../src/utils/posthog.utils';
+import { getPostHogDistinctId, persistPostHogId } from '../../src/utils/posthog.utils';
 
-// Mock homedir to use a temp directory for tests
 const TEST_HOME_DIR = join(tmpdir(), `posthog-test-${Date.now()}`);
+
 vi.mock('os', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('os')>();
 	return {
@@ -15,23 +15,9 @@ vi.mock('os', async (importOriginal) => {
 	};
 });
 
-// Import after mocking
-const { getPostHogDistinctId } = await import('../../src/utils/posthog.utils');
-
 describe('getPostHogDistinctId', () => {
-	beforeEach(() => {
-		// Ensure clean state before each test
-		if (existsSync(TEST_HOME_DIR)) {
-			rmSync(TEST_HOME_DIR, { recursive: true, force: true });
-		}
-	});
-
-	afterEach(() => {
-		// Cleanup after each test
-		if (existsSync(TEST_HOME_DIR)) {
-			rmSync(TEST_HOME_DIR, { recursive: true, force: true });
-		}
-	});
+	beforeEach(removeTestHomeDir);
+	afterEach(removeTestHomeDir);
 
 	it('should create a new UUID when no file exists', () => {
 		const id = getPostHogDistinctId();
@@ -65,3 +51,9 @@ describe('getPostHogDistinctId', () => {
 		expect(id).not.toBe('not-a-valid-uuid');
 	});
 });
+
+function removeTestHomeDir() {
+	if (existsSync(TEST_HOME_DIR)) {
+		rmSync(TEST_HOME_DIR, { recursive: true, force: true });
+	}
+}

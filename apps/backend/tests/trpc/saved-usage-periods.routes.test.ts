@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const state = vi.hoisted(() => ({
 	preferences: {} as Record<string, unknown>,
 }));
@@ -52,6 +54,7 @@ import {
 } from '../../src/types/usage';
 
 const testRouter = router(usageRoutes);
+const caller = createTestCaller(testRouter);
 
 describe('saved usage period routes', () => {
 	beforeEach(() => {
@@ -59,7 +62,6 @@ describe('saved usage period routes', () => {
 	});
 
 	it('creates, updates, selects, and deletes saved periods', async () => {
-		const caller = createCaller();
 		const created = await caller.createSavedPeriod({
 			projectId: 'project-id',
 			savedPeriod: { days: 5000, granularity: 'month' },
@@ -108,7 +110,7 @@ describe('saved usage period routes', () => {
 		state.preferences = { savedUsagePeriods: savedPeriods };
 
 		await expect(
-			createCaller().createSavedPeriod({
+			caller.createSavedPeriod({
 				projectId: 'project-id',
 				savedPeriod: { days: 30, granularity: 'day' },
 			}),
@@ -131,7 +133,7 @@ describe('saved usage period routes', () => {
 			savedUsagePeriods: savedPeriods,
 		};
 
-		await expect(createCaller().getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
+		await expect(caller.getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
 			selection: DEFAULT_USAGE_PERIOD_SELECTION,
 			savedPeriods: retainedSavedPeriods,
 		});
@@ -142,8 +144,6 @@ describe('saved usage period routes', () => {
 	});
 
 	it('rejects unknown saved periods', async () => {
-		const caller = createCaller();
-
 		await expect(
 			caller.updatePeriodSelection({
 				projectId: 'project-id',
@@ -162,7 +162,6 @@ describe('saved usage period routes', () => {
 				{ id: 'invalid', days: 0, granularity: 'day' },
 			],
 		};
-		const caller = createCaller();
 
 		const created = await caller.createSavedPeriod({
 			projectId: 'project-id',
@@ -181,7 +180,7 @@ describe('saved usage period routes', () => {
 			savedUsagePeriods: [{ id: 'invalid', days: 0, granularity: 'day' }],
 		};
 
-		await expect(createCaller().getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
+		await expect(caller.getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
 			selection: DEFAULT_USAGE_PERIOD_SELECTION,
 			savedPeriods: [],
 		});
@@ -198,7 +197,7 @@ describe('saved usage period routes', () => {
 			savedUsagePeriods: [savedPeriod],
 		};
 
-		await expect(createCaller().getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
+		await expect(caller.getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
 			selection: { mode: 'saved', savedPeriodId: savedPeriod.id },
 			savedPeriods: [savedPeriod],
 		});
@@ -215,7 +214,7 @@ describe('saved usage period routes', () => {
 			savedUsagePeriods: [validSavedPeriod, { id: 'invalid', days: 0, granularity: 'day' }],
 		};
 
-		await expect(createCaller().getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
+		await expect(caller.getPeriodSettings({ projectId: 'project-id' })).resolves.toEqual({
 			selection: DEFAULT_USAGE_PERIOD_SELECTION,
 			savedPeriods: [validSavedPeriod],
 		});
@@ -226,21 +225,8 @@ describe('saved usage period routes', () => {
 	});
 
 	it('rejects preference requests for a stale project', async () => {
-		await expect(createCaller().getPeriodSettings({ projectId: 'other-project' })).rejects.toMatchObject({
+		await expect(caller.getPeriodSettings({ projectId: 'other-project' })).rejects.toMatchObject({
 			code: 'BAD_REQUEST',
 		});
 	});
 });
-
-function createCaller() {
-	return testRouter.createCaller({
-		session: {
-			user: {
-				id: 'user-id',
-				name: 'Test User',
-				email: 'test@example.com',
-			},
-		},
-		selectedProjectId: 'project-id',
-	} as never);
-}

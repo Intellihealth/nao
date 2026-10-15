@@ -10,7 +10,7 @@ import {
 	mutateUserPreferences,
 	updateUserPreferences,
 } from '../../src/queries/user-preference.queries';
-import type { UsagePeriodRange } from '../../src/types/usage';
+import type { SavedUsagePeriod, StoredUserPreferences, UsagePeriodRange } from '../../src/types/usage';
 import { usagePeriodRangeSchema } from '../../src/types/usage';
 import { formatDate } from '../../src/utils/date';
 
@@ -137,38 +137,8 @@ describe('usage query results', () => {
 	it('serializes concurrent project preference transforms', async () => {
 		await updateUserPreferences(USER_ID, { toolCallDensity: 'detailed' });
 		await Promise.all([
-			mutateUserPreferences(USER_ID, (current) => {
-				const projectPreferences = current.projectPreferences?.[PROJECT_ID] ?? {};
-				return {
-					...current,
-					projectPreferences: {
-						...current.projectPreferences,
-						[PROJECT_ID]: {
-							...projectPreferences,
-							savedUsagePeriods: [
-								...(projectPreferences.savedUsagePeriods ?? []),
-								{ id: 'first', days: 30, granularity: 'day' },
-							],
-						},
-					},
-				};
-			}),
-			mutateUserPreferences(USER_ID, (current) => {
-				const projectPreferences = current.projectPreferences?.[PROJECT_ID] ?? {};
-				return {
-					...current,
-					projectPreferences: {
-						...current.projectPreferences,
-						[PROJECT_ID]: {
-							...projectPreferences,
-							savedUsagePeriods: [
-								...(projectPreferences.savedUsagePeriods ?? []),
-								{ id: 'second', days: 365, granularity: 'month' },
-							],
-						},
-					},
-				};
-			}),
+			mutateUserPreferences(USER_ID, appendSavedUsagePeriod({ id: 'first', days: 30, granularity: 'day' })),
+			mutateUserPreferences(USER_ID, appendSavedUsagePeriod({ id: 'second', days: 365, granularity: 'month' })),
 		]);
 
 		const preferences = await getUserPreferences(USER_ID);
@@ -386,3 +356,19 @@ describe('usage query results', () => {
 		expect(today?.users).toEqual([{ userName: 'Usage User', messageCount: 1, totalTokens: 0, totalCost: 0 }]);
 	});
 });
+
+function appendSavedUsagePeriod(savedUsagePeriod: SavedUsagePeriod) {
+	return (current: StoredUserPreferences): StoredUserPreferences => {
+		const projectPreferences = current.projectPreferences?.[PROJECT_ID] ?? {};
+		return {
+			...current,
+			projectPreferences: {
+				...current.projectPreferences,
+				[PROJECT_ID]: {
+					...projectPreferences,
+					savedUsagePeriods: [...(projectPreferences.savedUsagePeriods ?? []), savedUsagePeriod],
+				},
+			},
+		};
+	};
+}

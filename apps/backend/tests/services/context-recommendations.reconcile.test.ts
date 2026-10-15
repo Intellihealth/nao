@@ -97,28 +97,16 @@ describe('repairTriggerRefs', () => {
 });
 
 describe('reconcile', () => {
-	const base = { totals: TOTALS, impactFloor: 5 };
+	const findingFingerprint = fingerprintFor('databases/x/columns.md', 'events_v1');
 
 	it('inserts a new finding above the floor', () => {
-		const actions = reconcile({
-			...base,
-			existing: [],
-			recorded: [finding()],
-			resolvedFingerprints: [],
-			dismissedFingerprints: [],
-		});
+		const actions = reconcileWith({ recorded: [finding()] });
 		expect(actions).toHaveLength(1);
 		expect(actions[0].kind).toBe('insert');
 	});
 
 	it('collapses repeat recordings of one resource into a single action (last wins)', () => {
-		const actions = reconcile({
-			...base,
-			existing: [],
-			recorded: [finding({ title: 'first pass' }), finding({ title: 'refined' })],
-			resolvedFingerprints: [],
-			dismissedFingerprints: [],
-		});
+		const actions = reconcileWith({ recorded: [finding({ title: 'first pass' }), finding({ title: 'refined' })] });
 		expect(actions).toHaveLength(1);
 		expect(actions[0]).toMatchObject({ kind: 'insert', finding: { title: 'refined' } });
 	});
@@ -127,77 +115,51 @@ describe('reconcile', () => {
 		const tiny = finding({
 			insights: [{ signalType: 'tool_error', metric: 'errors', count: 1, triggerRefs: [{ chatId: 'c1' }] }],
 		});
-		const actions = reconcile({
-			...base,
-			impactFloor: 1000,
-			existing: [],
-			recorded: [tiny],
-			resolvedFingerprints: [],
-			dismissedFingerprints: [],
-		});
+		const actions = reconcileWith({ impactFloor: 1000, recorded: [tiny] });
 		expect(actions).toHaveLength(0);
 	});
 
 	it('skips a dismissed fingerprint', () => {
-		const fp = fingerprintFor('databases/x/columns.md', 'events_v1');
-		const actions = reconcile({
-			...base,
-			existing: [],
-			recorded: [finding()],
-			resolvedFingerprints: [],
-			dismissedFingerprints: [fp],
-		});
+		const actions = reconcileWith({ recorded: [finding()], dismissedFingerprints: [findingFingerprint] });
 		expect(actions).toHaveLength(0);
 	});
 
 	it('updates an existing open rec (keeps state)', () => {
-		const fp = fingerprintFor('databases/x/columns.md', 'events_v1');
-		const existing = [{ id: 'r1', fingerprint: fp, status: 'open' as const, occurrenceCount: 1 }];
-		const actions = reconcile({
-			...base,
-			existing,
-			recorded: [finding()],
-			resolvedFingerprints: [],
-			dismissedFingerprints: [],
-		});
+		const existing = [{ id: 'r1', fingerprint: findingFingerprint, status: 'open' as const, occurrenceCount: 1 }];
+		const actions = reconcileWith({ existing, recorded: [finding()] });
 		expect(actions[0]).toMatchObject({ kind: 'update', id: 'r1', reopen: false });
 	});
 
 	it('reopens an applied rec when the gap recurs', () => {
-		const fp = fingerprintFor('databases/x/columns.md', 'events_v1');
-		const existing = [{ id: 'r1', fingerprint: fp, status: 'applied' as const, occurrenceCount: 3 }];
-		const actions = reconcile({
-			...base,
-			existing,
-			recorded: [finding()],
-			resolvedFingerprints: [],
-			dismissedFingerprints: [],
-		});
+		const existing = [
+			{ id: 'r1', fingerprint: findingFingerprint, status: 'applied' as const, occurrenceCount: 3 },
+		];
+		const actions = reconcileWith({ existing, recorded: [finding()] });
 		expect(actions[0]).toMatchObject({ kind: 'update', id: 'r1', reopen: true });
 	});
 
 	it('auto-clears an open rec the agent verified resolved', () => {
 		const fp = fingerprintFor('RULES.md', 'gone');
 		const existing = [{ id: 'r2', fingerprint: fp, status: 'open' as const, occurrenceCount: 1 }];
-		const actions = reconcile({
-			...base,
-			existing,
-			recorded: [],
-			resolvedFingerprints: [fp],
-			dismissedFingerprints: [],
-		});
+		const actions = reconcileWith({ existing, resolvedFingerprints: [fp] });
 		expect(actions[0]).toMatchObject({ kind: 'resolve', id: 'r2' });
 	});
 
 	it('leaves an unmentioned open rec unchanged (no inferred auto-clear)', () => {
 		const existing = [{ id: 'r3', fingerprint: 'other', status: 'open' as const, occurrenceCount: 1 }];
-		const actions = reconcile({
-			...base,
-			existing,
-			recorded: [],
-			resolvedFingerprints: [],
-			dismissedFingerprints: [],
-		});
+		const actions = reconcileWith({ existing });
 		expect(actions).toHaveLength(0);
 	});
 });
+
+function reconcileWith(input: Partial<Parameters<typeof reconcile>[0]>) {
+	return reconcile({
+		totals: TOTALS,
+		impactFloor: 5,
+		existing: [],
+		recorded: [],
+		resolvedFingerprints: [],
+		dismissedFingerprints: [],
+		...input,
+	});
+}

@@ -58,26 +58,23 @@ vi.mock('../../src/services/posthog', () => ({
 
 import { telegramService } from '../../src/services/telegram';
 
+type TelegramServiceInternals = {
+	_projectId: string;
+	_redirectUrl: string;
+	_userByTelegramId: Map<string, string>;
+	_handleWorkFlow: (
+		thread: { id?: string; post: ReturnType<typeof vi.fn> },
+		message: { text: string; raw: { from: { id: number } } },
+	) => Promise<void>;
+};
+
+const service = telegramService as unknown as TelegramServiceInternals;
+
 describe('Telegram user validation', () => {
 	beforeEach(() => {
-		(
-			telegramService as unknown as {
-				_projectId: string;
-				_redirectUrl: string;
-				_userByTelegramId: Map<string, string>;
-			}
-		)._projectId = 'project-id';
-		(
-			telegramService as unknown as {
-				_redirectUrl: string;
-				_userByTelegramId: Map<string, string>;
-			}
-		)._redirectUrl = 'https://nao.example/';
-		(
-			telegramService as unknown as {
-				_userByTelegramId: Map<string, string>;
-			}
-		)._userByTelegramId.clear();
+		service._projectId = 'project-id';
+		service._redirectUrl = 'https://nao.example/';
+		service._userByTelegramId.clear();
 		mocks.assertProjectCloudBillingAccess.mockReset().mockResolvedValue(undefined);
 		mocks.createAgent.mockReset().mockResolvedValue({
 			getModelId: vi.fn(() => 'model-id'),
@@ -101,14 +98,7 @@ describe('Telegram user validation', () => {
 	it('responds once when the Telegram user is not linked', async () => {
 		const post = vi.fn().mockResolvedValue(undefined);
 
-		await (
-			telegramService as unknown as {
-				_handleWorkFlow: (
-					thread: { post: typeof post },
-					message: { text: string; raw: { from: { id: number } } },
-				) => Promise<void>;
-			}
-		)._handleWorkFlow({ post }, { text: 'Hello', raw: { from: { id: 123 } } });
+		await service._handleWorkFlow({ post }, { text: 'Hello', raw: { from: { id: 123 } } });
 
 		expect(post).toHaveBeenCalledOnce();
 		expect(post).toHaveBeenCalledWith(
@@ -118,16 +108,7 @@ describe('Telegram user validation', () => {
 
 	it('responds once when the Telegram user lacks project access', async () => {
 		const post = vi.fn().mockResolvedValue(undefined);
-		const service = telegramService as unknown as {
-			_handleWorkFlow: (
-				thread: { post: typeof post },
-				message: { text: string; raw: { from: { id: number } } },
-			) => Promise<void>;
-			_userByTelegramId: Map<string, string>;
-		};
-		service._userByTelegramId.set('456', 'user@example.com');
-		mocks.getUser.mockResolvedValue({ id: 'user-id' });
-		mocks.getUserRoleInProject.mockResolvedValue('viewer');
+		linkTelegramUser(456, 'viewer');
 
 		await service._handleWorkFlow({ post }, { text: 'Hello', raw: { from: { id: 456 } } });
 
@@ -139,16 +120,7 @@ describe('Telegram user validation', () => {
 
 	it('checks billing access before storing a thread message', async () => {
 		const post = vi.fn().mockResolvedValue(undefined);
-		const service = telegramService as unknown as {
-			_handleWorkFlow: (
-				thread: { id: string; post: typeof post },
-				message: { text: string; raw: { from: { id: number } } },
-			) => Promise<void>;
-			_userByTelegramId: Map<string, string>;
-		};
-		service._userByTelegramId.set('789', 'user@example.com');
-		mocks.getUser.mockResolvedValue({ id: 'user-id' });
-		mocks.getUserRoleInProject.mockResolvedValue('user');
+		linkTelegramUser(789, 'user');
 		mocks.assertProjectCloudBillingAccess.mockRejectedValue(new Error('billing restricted'));
 		mocks.getChatByTelegramThread.mockResolvedValue(null);
 
@@ -164,16 +136,7 @@ describe('Telegram user validation', () => {
 	it('shows the failure when agent creation is rejected', async () => {
 		const sentMessage = { delete: vi.fn(), edit: vi.fn() };
 		const post = vi.fn().mockResolvedValue(sentMessage);
-		const service = telegramService as unknown as {
-			_handleWorkFlow: (
-				thread: { id: string; post: typeof post },
-				message: { text: string; raw: { from: { id: number } } },
-			) => Promise<void>;
-			_userByTelegramId: Map<string, string>;
-		};
-		service._userByTelegramId.set('102', 'user@example.com');
-		mocks.getUser.mockResolvedValue({ id: 'user-id' });
-		mocks.getUserRoleInProject.mockResolvedValue('user');
+		linkTelegramUser(102, 'user');
 		mocks.createAgent.mockRejectedValue(new Error('billing restricted'));
 
 		await service._handleWorkFlow({ id: 'thread-id', post }, { text: 'Hello', raw: { from: { id: 102 } } });
@@ -186,18 +149,8 @@ describe('Telegram user validation', () => {
 	});
 
 	it('starts the agent after validating the user', async () => {
-		const sentMessage = { delete: vi.fn(), edit: vi.fn() };
-		const post = vi.fn().mockResolvedValue(sentMessage);
-		const service = telegramService as unknown as {
-			_handleWorkFlow: (
-				thread: { id: string; post: typeof post },
-				message: { text: string; raw: { from: { id: number } } },
-			) => Promise<void>;
-			_userByTelegramId: Map<string, string>;
-		};
-		service._userByTelegramId.set('101', 'user@example.com');
-		mocks.getUser.mockResolvedValue({ id: 'user-id' });
-		mocks.getUserRoleInProject.mockResolvedValue('user');
+		const post = vi.fn().mockResolvedValue({ delete: vi.fn(), edit: vi.fn() });
+		linkTelegramUser(101, 'user');
 
 		await service._handleWorkFlow({ id: 'thread-id', post }, { text: 'Hello', raw: { from: { id: 101 } } });
 
@@ -217,3 +170,9 @@ describe('Telegram user validation', () => {
 		);
 	});
 });
+
+function linkTelegramUser(telegramId: number, projectRole: string): void {
+	service._userByTelegramId.set(String(telegramId), 'user@example.com');
+	mocks.getUser.mockResolvedValue({ id: 'user-id' });
+	mocks.getUserRoleInProject.mockResolvedValue(projectRole);
+}

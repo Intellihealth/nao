@@ -3,17 +3,15 @@ import { describe, expect, it } from 'vitest';
 
 import { findInternalSkill, internalSkillNames, listInternalSkills } from '../../src/agents/skills';
 import loadSkillTool from '../../src/agents/tools/load-skill';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
 const bodyOf = (name: string, canRunSandbox: boolean): string => {
 	return findInternalSkill(name)!.body({ canRunSandbox });
 };
 
+/** A run with no agent settings has no sandbox, which is what the tool has to assume here. */
 const runLoadSkill = async (name: string): Promise<{ name: string; body: string }> => {
-	// A run with no agent settings has no sandbox, which is what the tool has to assume here.
-	return (await loadSkillTool.execute!({ name }, { experimental_context: {}, toolCallId: 't', messages: [] })) as {
-		name: string;
-		body: string;
-	};
+	return (await executeTool(loadSkillTool, { name }, createToolContext())) as { name: string; body: string };
 };
 
 describe('internal skill registry', () => {

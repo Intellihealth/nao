@@ -347,7 +347,6 @@ describe('renderToMarkdown', () => {
 				<md.Span>World</md.Span>
 			</md.Block>,
 		);
-		console.log(result);
 		expect(result).toBe('---Hello\nWorld');
 	});
 

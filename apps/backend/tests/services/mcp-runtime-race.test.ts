@@ -1,8 +1,6 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createMcpProject } from '../helpers/mcp-project';
 
 const createdRuntimes: FakeRuntime[] = [];
 
@@ -46,50 +44,31 @@ vi.mock('mcporter', () => ({
 }));
 
 vi.mock('../../src/db/db', () => ({ db: {} }));
-
-let projectPath = '';
-
-vi.mock('../../src/queries/project.queries', () => ({
-	retrieveProjectById: async () => ({ path: projectPath }),
-	getDisabledMcpServers: async () => [],
-	getDisabledMcpTools: async () => [],
-	getEnvVars: async () => ({}),
-}));
-
-vi.mock('../../src/queries/mcp-oauth.queries', () => ({
-	claimMcpDiscoveryUser: async () => false,
-	deleteMcpUserToken: async () => undefined,
-	getMcpOAuthClient: async () => null,
-	hasMcpUserToken: async () => false,
-}));
+vi.mock(
+	'../../src/queries/project.queries',
+	async () => (await import('../helpers/mcp-project')).mcpProjectQueriesMock,
+);
+vi.mock(
+	'../../src/queries/mcp-oauth.queries',
+	async () => (await import('../helpers/mcp-project')).mcpOAuthQueriesMock,
+);
 
 import { McpService } from '../../src/services/mcp';
 
 const SERVERS = ['alpha', 'beta', 'gamma'];
-
-async function createProjectWithServers(): Promise<string> {
-	const root = await mkdtemp(join(tmpdir(), 'nao-mcp-race-'));
-	const mcpsDir = join(root, 'agent', 'mcps');
-	await mkdir(mcpsDir, { recursive: true });
-	const mcpServers = Object.fromEntries(
-		SERVERS.map((name) => [name, { command: 'node', args: ['-e', 'process.exit(0)'] }]),
-	);
-	await writeFile(join(mcpsDir, 'mcp.json'), JSON.stringify({ mcpServers }, null, 2), 'utf8');
-	return root;
-}
 
 describe('MCP concurrent discovery (issue #1292)', () => {
 	beforeEach(async () => {
 		createdRuntimes.length = 0;
 		creationGates.length = 0;
 		gateCreations = false;
-		projectPath = await createProjectWithServers();
+		await createMcpProject(
+			Object.fromEntries(SERVERS.map((name) => [name, { command: 'node', args: ['-e', 'process.exit(0)'] }])),
+		);
 	});
 
 	it('shares a single runtime across parallel discovery', async () => {
-		const service = new McpService();
-
-		await service.initializeMcpState('project-1');
+		const service = await createInitializedService();
 		const statuses = await service.getServersStatus('project-1');
 
 		expect(createdRuntimes).toHaveLength(1);
@@ -97,27 +76,13 @@ describe('MCP concurrent discovery (issue #1292)', () => {
 	});
 
 	it('can call a tool on every server after discovery', async () => {
-		const service = new McpService();
-		await service.initializeMcpState('project-1');
+		const service = await createInitializedService();
 
-		const results = await Promise.allSettled(
-			SERVERS.map((server) =>
-				service.callTool({
-					projectId: 'project-1',
-					userId: 'user-1',
-					server,
-					tool: `${server}_tool`,
-					args: {},
-				}),
-			),
-		);
-
-		expect(results.filter((result) => result.status === 'rejected')).toEqual([]);
+		expect(await findRejectedToolCallsOnEveryServer(service)).toEqual([]);
 	});
 
 	it('keeps every server callable when a reload lands mid-creation', async () => {
-		const service = new McpService();
-		await service.initializeMcpState('project-1');
+		const service = await createInitializedService();
 
 		const internals = service as unknown as {
 			_ensureRegistered: (name: string) => Promise<unknown>;
@@ -138,21 +103,30 @@ describe('MCP concurrent discovery (issue #1292)', () => {
 		await Promise.all([beforeReload, afterReload]);
 		gateCreations = false;
 
-		const results = await Promise.allSettled(
-			SERVERS.map((server) =>
-				service.callTool({
-					projectId: 'project-1',
-					userId: 'user-1',
-					server,
-					tool: `${server}_tool`,
-					args: {},
-				}),
-			),
-		);
-
-		expect(results.filter((result) => result.status === 'rejected')).toEqual([]);
+		expect(await findRejectedToolCallsOnEveryServer(service)).toEqual([]);
 	});
 });
+
+async function createInitializedService(): Promise<McpService> {
+	const service = new McpService();
+	await service.initializeMcpState('project-1');
+	return service;
+}
+
+async function findRejectedToolCallsOnEveryServer(service: McpService): Promise<PromiseSettledResult<unknown>[]> {
+	const results = await Promise.allSettled(
+		SERVERS.map((server) =>
+			service.callTool({
+				projectId: 'project-1',
+				userId: 'user-1',
+				server,
+				tool: `${server}_tool`,
+				args: {},
+			}),
+		),
+	);
+	return results.filter((result) => result.status === 'rejected');
+}
 
 async function waitForCreations(count: number): Promise<void> {
 	while (creationGates.length < count) {

@@ -6,14 +6,13 @@ vi.mock('../../src/queries/chat.queries', () => ({
 }));
 
 import displayChartTool from '../../src/agents/tools/display-chart';
-import type { ToolContext } from '../../src/types/tools';
+import { createToolContext, executeTool } from '../helpers/tool-context';
 
 describe('display_chart execute', () => {
 	it('accepts horizontal bars with multiple series', async () => {
-		const context = {
-			generatedArtifacts: { charts: [], maps: [], stories: [] },
-		} as unknown as ToolContext;
-		const output = await displayChartTool.execute!(
+		const context = createToolContext();
+		const output = await executeTool(
+			displayChartTool,
 			{
 				query_id: 'query-1',
 				chart_type: 'horizontal_bar',
@@ -22,9 +21,7 @@ describe('display_chart execute', () => {
 				series: [{ data_key: 'revenue' }, { data_key: 'cost' }],
 				title: 'Revenue and cost',
 			},
-			{
-				experimental_context: context,
-			} as Parameters<NonNullable<typeof displayChartTool.execute>>[1],
+			context,
 		);
 
 		expect(output).toMatchObject({ success: true });
@@ -32,10 +29,9 @@ describe('display_chart execute', () => {
 	});
 
 	it('requires multiple series for normalized horizontal bars', async () => {
-		const context = {
-			generatedArtifacts: { charts: [], maps: [], stories: [] },
-		} as unknown as ToolContext;
-		const output = await displayChartTool.execute!(
+		const context = createToolContext();
+		const output = await executeTool(
+			displayChartTool,
 			{
 				query_id: 'query-1',
 				chart_type: 'horizontal_bar_100',
@@ -44,9 +40,7 @@ describe('display_chart execute', () => {
 				series: [{ data_key: 'revenue' }],
 				title: 'Revenue share',
 			},
-			{
-				experimental_context: context,
-			} as Parameters<NonNullable<typeof displayChartTool.execute>>[1],
+			context,
 		);
 
 		expect(output).toMatchObject({

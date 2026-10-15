@@ -35,6 +35,23 @@ vi.mock('../../src/utils/messaging-provider', () => ({
 
 import { whatsappService } from '../../src/services/whatsapp';
 
+type WhatsappServiceInternals = {
+	_projectId: string;
+	_currentAccessToken: string;
+	_currentPhoneNumberId: string;
+	_handleWorkFlow: (
+		thread: { post: ReturnType<typeof vi.fn> },
+		message: { id: string; text: string; author: { userId: string }; attachments: unknown[] },
+	) => Promise<void>;
+	_createAgentStream: (
+		chat: { id: string; messages: unknown[] },
+		ctx: { user: { id: string }; timezone: string },
+		chatUrl: string,
+	) => Promise<ReadableStream>;
+};
+
+const service = whatsappService as unknown as WhatsappServiceInternals;
+
 describe('WhatsApp billing access', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -42,11 +59,9 @@ describe('WhatsApp billing access', () => {
 			'fetch',
 			vi.fn(async () => ({ ok: true })),
 		);
-		Object.assign(whatsappService as unknown as Record<string, unknown>, {
-			_projectId: 'project-1',
-			_currentAccessToken: 'token',
-			_currentPhoneNumberId: 'phone-1',
-		});
+		service._projectId = 'project-1';
+		service._currentAccessToken = 'token';
+		service._currentPhoneNumberId = 'phone-1';
 		mocks.getLinkedWhatsappUser.mockResolvedValue({ userId: 'user-1' });
 		mocks.getUser.mockResolvedValue({ id: 'user-1' });
 		mocks.getUserRoleInProject.mockResolvedValue('user');
@@ -60,14 +75,7 @@ describe('WhatsApp billing access', () => {
 		mocks.assertProjectCloudBillingAccess.mockRejectedValue(new Error('Cloud billing access is restricted'));
 		const post = vi.fn().mockResolvedValue(undefined);
 
-		await (
-			whatsappService as unknown as {
-				_handleWorkFlow: (
-					thread: { post: typeof post },
-					message: { id: string; text: string; author: { userId: string }; attachments: unknown[] },
-				) => Promise<void>;
-			}
-		)._handleWorkFlow(
+		await service._handleWorkFlow(
 			{ post },
 			{
 				id: 'message-1',
@@ -90,15 +98,7 @@ describe('WhatsApp billing access', () => {
 			stream: () => stream,
 		});
 
-		await (
-			whatsappService as unknown as {
-				_createAgentStream: (
-					chat: { id: string; messages: unknown[] },
-					ctx: { user: { id: string }; timezone: string },
-					chatUrl: string,
-				) => Promise<ReadableStream>;
-			}
-		)._createAgentStream(
+		await service._createAgentStream(
 			{ id: 'chat-1', messages: [] },
 			{ user: { id: 'user-1' }, timezone: 'UTC' },
 			'https://example.com/chat-1',

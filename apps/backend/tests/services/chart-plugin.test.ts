@@ -1,19 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { listChartPlugins, readChartPlugin } from '../../src/services/chart-plugin';
+import { useTemporaryFolders } from '../helpers/temporary-folders';
 
-const projectFolders: string[] = [];
-
-afterEach(() => {
-	for (const folder of projectFolders) {
-		rmSync(folder, { recursive: true, force: true });
-	}
-	projectFolders.length = 0;
-});
+const createTemporaryFolder = useTemporaryFolders();
 
 describe('chart plugins', () => {
 	it('discovers flat JavaScript modules with optional metadata', () => {
@@ -94,8 +87,7 @@ describe('chart plugins', () => {
 });
 
 function createProject(withChartsFolder = true): string {
-	const project = mkdtempSync(join(tmpdir(), 'nao-chart-plugin-'));
-	projectFolders.push(project);
+	const project = createTemporaryFolder('nao-chart-plugin-');
 	if (withChartsFolder) {
 		mkdirSync(join(project, 'agent', 'charts'), { recursive: true });
 	}

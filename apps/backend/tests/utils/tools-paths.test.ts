@@ -1,289 +1,221 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-/**
- * Dynamically imports the tools module with a mocked `path` implementation
- * (posix or win32) and a stubbed `fs` (no .naoignore files on disk).
- */
-async function loadTools(variant: 'posix' | 'win32') {
-	vi.resetModules();
-
-	const pathModule = await import('path');
-	const impl = pathModule[variant];
-	vi.doMock('path', () => ({ ...impl, default: impl }));
-	const statSync = () => {
-		const err = new Error('ENOENT') as NodeJS.ErrnoException;
-		err.code = 'ENOENT';
-		throw err;
-	};
-	vi.doMock('fs', () => ({
-		default: { existsSync: () => false, readFileSync: () => '', realpathSync: statSync, statSync },
-		existsSync: () => false,
-		readFileSync: () => '',
-		realpathSync: statSync,
-		statSync,
-	}));
-
-	const tools = await import('../../src/utils/tools');
-	tools.clearNaoignoreCache();
-	return tools;
-}
+const POSIX_PROJECT = '/home/user/project';
+const WIN32_PROJECT = 'C:\\Users\\user\\project';
+const WIN32_FORWARD_SLASH_PROJECT = 'C:/Users/user/project';
 
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.resetModules();
 });
 
-// ---------------------------------------------------------------------------
-// toRealPath
-// ---------------------------------------------------------------------------
-
 describe('toRealPath', () => {
 	describe('posix', () => {
-		it('resolves virtual path with leading slash', async () => {
-			const { toRealPath } = await loadTools('posix');
-			expect(toRealPath('/databases', '/home/user/project')).toBe('/home/user/project/databases');
-		});
-
-		it('resolves virtual path without leading slash', async () => {
-			const { toRealPath } = await loadTools('posix');
-			expect(toRealPath('agent', '/home/user/project')).toBe('/home/user/project/agent');
-		});
-
-		it('resolves root virtual path to project folder', async () => {
-			const { toRealPath } = await loadTools('posix');
-			expect(toRealPath('/', '/home/user/project')).toBe('/home/user/project');
-		});
-
-		it('resolves nested paths', async () => {
-			const { toRealPath } = await loadTools('posix');
-			expect(toRealPath('/databases/schemas/public.sql', '/home/user/project')).toBe(
+		it.each([
+			['resolves virtual path with leading slash', '/databases', POSIX_PROJECT, '/home/user/project/databases'],
+			['resolves virtual path without leading slash', 'agent', POSIX_PROJECT, '/home/user/project/agent'],
+			['resolves root virtual path to project folder', '/', POSIX_PROJECT, POSIX_PROJECT],
+			[
+				'resolves nested paths',
+				'/databases/schemas/public.sql',
+				POSIX_PROJECT,
 				'/home/user/project/databases/schemas/public.sql',
-			);
+			],
+			[
+				'normalizes trailing slash on project folder',
+				'/databases',
+				'/home/user/project/',
+				'/home/user/project/databases',
+			],
+		])('%s', async (_name, virtualPath, projectFolder, expected) => {
+			const { toRealPath } = await loadTools('posix');
+			expect(toRealPath(virtualPath, projectFolder)).toBe(expected);
 		});
 
-		it('rejects path traversal with ..', async () => {
+		it.each([
+			['rejects path traversal with ..', '/../etc/passwd', 'outside the project folder'],
+			['rejects path traversal with relative ..', '../etc/passwd', 'outside the project folder'],
+			['rejects excluded .meta directory', '/.meta/something', 'excluded directory'],
+		])('%s', async (_name, virtualPath, error) => {
 			const { toRealPath } = await loadTools('posix');
-			expect(() => toRealPath('/../etc/passwd', '/home/user/project')).toThrow('outside the project folder');
-		});
-
-		it('rejects path traversal with relative ..', async () => {
-			const { toRealPath } = await loadTools('posix');
-			expect(() => toRealPath('../etc/passwd', '/home/user/project')).toThrow('outside the project folder');
-		});
-
-		it('rejects excluded .meta directory', async () => {
-			const { toRealPath } = await loadTools('posix');
-			expect(() => toRealPath('/.meta/something', '/home/user/project')).toThrow('excluded directory');
+			expect(() => toRealPath(virtualPath, POSIX_PROJECT)).toThrow(error);
 		});
 
 		it('rejects protected paths regardless of case', async () => {
 			const { toRealPath } = await loadTools('posix');
-			expect(() => toRealPath('/.GIT/config', '/home/user/project')).toThrow('protected .git metadata');
-			expect(() => toRealPath('/.Env', '/home/user/project')).toThrow('protected environment file');
-			expect(() => toRealPath('/.MeTa/something', '/home/user/project')).toThrow('excluded directory');
-		});
-
-		it('normalizes trailing slash on project folder', async () => {
-			const { toRealPath } = await loadTools('posix');
-			expect(toRealPath('/databases', '/home/user/project/')).toBe('/home/user/project/databases');
+			expect(() => toRealPath('/.GIT/config', POSIX_PROJECT)).toThrow('protected .git metadata');
+			expect(() => toRealPath('/.Env', POSIX_PROJECT)).toThrow('protected environment file');
+			expect(() => toRealPath('/.MeTa/something', POSIX_PROJECT)).toThrow('excluded directory');
 		});
 	});
 
 	describe('win32', () => {
-		it('resolves with backslash project folder', async () => {
-			const { toRealPath } = await loadTools('win32');
-			expect(toRealPath('/databases', 'C:\\Users\\user\\project')).toBe('C:\\Users\\user\\project\\databases');
-		});
-
-		it('resolves with forward-slash project folder', async () => {
-			const { toRealPath } = await loadTools('win32');
-			expect(toRealPath('/databases', 'C:/Users/user/project')).toBe('C:\\Users\\user\\project\\databases');
-		});
-
-		it('resolves without leading slash and forward-slash project folder', async () => {
-			const { toRealPath } = await loadTools('win32');
-			expect(toRealPath('agent', 'C:/Users/user/project')).toBe('C:\\Users\\user\\project\\agent');
-		});
-
-		it('resolves root virtual path to project folder', async () => {
-			const { toRealPath } = await loadTools('win32');
-			expect(toRealPath('/', 'C:\\Users\\user\\project')).toBe('C:\\Users\\user\\project');
-		});
-
-		it('resolves nested paths with forward-slash project folder', async () => {
-			const { toRealPath } = await loadTools('win32');
-			expect(toRealPath('/databases/schemas/public.sql', 'C:/Users/user/project')).toBe(
+		it.each([
+			[
+				'resolves with backslash project folder',
+				'/databases',
+				WIN32_PROJECT,
+				'C:\\Users\\user\\project\\databases',
+			],
+			[
+				'resolves with forward-slash project folder',
+				'/databases',
+				WIN32_FORWARD_SLASH_PROJECT,
+				'C:\\Users\\user\\project\\databases',
+			],
+			[
+				'resolves without leading slash and forward-slash project folder',
+				'agent',
+				WIN32_FORWARD_SLASH_PROJECT,
+				'C:\\Users\\user\\project\\agent',
+			],
+			['resolves root virtual path to project folder', '/', WIN32_PROJECT, WIN32_PROJECT],
+			[
+				'resolves nested paths with forward-slash project folder',
+				'/databases/schemas/public.sql',
+				WIN32_FORWARD_SLASH_PROJECT,
 				'C:\\Users\\user\\project\\databases\\schemas\\public.sql',
-			);
+			],
+			[
+				'handles mixed separators in project folder',
+				'/agent',
+				'C:/Users\\user/project',
+				'C:\\Users\\user\\project\\agent',
+			],
+		])('%s', async (_name, virtualPath, projectFolder, expected) => {
+			const { toRealPath } = await loadTools('win32');
+			expect(toRealPath(virtualPath, projectFolder)).toBe(expected);
 		});
 
-		it('rejects path traversal', async () => {
+		it.each([
+			['rejects path traversal', '/../something', 'outside the project folder'],
+			['rejects excluded .meta directory', '/.meta/data', 'excluded directory'],
+		])('%s', async (_name, virtualPath, error) => {
 			const { toRealPath } = await loadTools('win32');
-			expect(() => toRealPath('/../something', 'C:\\Users\\user\\project')).toThrow('outside the project folder');
-		});
-
-		it('rejects excluded .meta directory', async () => {
-			const { toRealPath } = await loadTools('win32');
-			expect(() => toRealPath('/.meta/data', 'C:\\Users\\user\\project')).toThrow('excluded directory');
+			expect(() => toRealPath(virtualPath, WIN32_PROJECT)).toThrow(error);
 		});
 
 		it('rejects protected paths regardless of case', async () => {
 			const { toRealPath } = await loadTools('win32');
-			expect(() => toRealPath('/.GIT/config', 'C:\\Users\\user\\project')).toThrow('protected .git metadata');
-			expect(() => toRealPath('/.Env', 'C:\\Users\\user\\project')).toThrow('protected environment file');
-			expect(() => toRealPath('/.MeTa/data', 'C:\\Users\\user\\project')).toThrow('excluded directory');
-		});
-
-		it('handles mixed separators in project folder', async () => {
-			const { toRealPath } = await loadTools('win32');
-			expect(toRealPath('/agent', 'C:/Users\\user/project')).toBe('C:\\Users\\user\\project\\agent');
+			expect(() => toRealPath('/.GIT/config', WIN32_PROJECT)).toThrow('protected .git metadata');
+			expect(() => toRealPath('/.Env', WIN32_PROJECT)).toThrow('protected environment file');
+			expect(() => toRealPath('/.MeTa/data', WIN32_PROJECT)).toThrow('excluded directory');
 		});
 	});
 });
-
-// ---------------------------------------------------------------------------
-// toVirtualPath
-// ---------------------------------------------------------------------------
 
 describe('toVirtualPath', () => {
 	describe('posix', () => {
-		it('converts real path to virtual path', async () => {
-			const { toVirtualPath } = await loadTools('posix');
-			expect(toVirtualPath('/home/user/project/databases', '/home/user/project')).toBe('/databases');
-		});
-
-		it('converts project folder itself to /', async () => {
-			const { toVirtualPath } = await loadTools('posix');
-			expect(toVirtualPath('/home/user/project', '/home/user/project')).toBe('/');
-		});
-
-		it('converts nested real path to virtual path', async () => {
-			const { toVirtualPath } = await loadTools('posix');
-			expect(toVirtualPath('/home/user/project/databases/schemas/public.sql', '/home/user/project')).toBe(
+		it.each([
+			['converts real path to virtual path', '/home/user/project/databases', '/databases'],
+			['converts project folder itself to /', POSIX_PROJECT, '/'],
+			[
+				'converts nested real path to virtual path',
+				'/home/user/project/databases/schemas/public.sql',
 				'/databases/schemas/public.sql',
-			);
+			],
+		])('%s', async (_name, realPath, expected) => {
+			const { toVirtualPath } = await loadTools('posix');
+			expect(toVirtualPath(realPath, POSIX_PROJECT)).toBe(expected);
 		});
 
 		it('rejects paths outside project folder', async () => {
 			const { toVirtualPath } = await loadTools('posix');
-			expect(() => toVirtualPath('/etc/passwd', '/home/user/project')).toThrow('outside the project folder');
+			expect(() => toVirtualPath('/etc/passwd', POSIX_PROJECT)).toThrow('outside the project folder');
 		});
 	});
 
 	describe('win32', () => {
-		it('converts real path using forward slashes in output', async () => {
+		it.each([
+			[
+				'converts real path using forward slashes in output',
+				'C:\\Users\\user\\project\\databases',
+				WIN32_PROJECT,
+				'/databases',
+			],
+			[
+				'converts nested path using forward slashes in output',
+				'C:\\Users\\user\\project\\databases\\schemas\\public.sql',
+				WIN32_PROJECT,
+				'/databases/schemas/public.sql',
+			],
+			['converts project folder itself to /', WIN32_PROJECT, WIN32_PROJECT, '/'],
+			[
+				'works with forward-slash project folder',
+				'C:\\Users\\user\\project\\agent',
+				WIN32_FORWARD_SLASH_PROJECT,
+				'/agent',
+			],
+			[
+				'returns forward slashes even for deeply nested Windows paths',
+				'C:\\Users\\user\\project\\a\\b\\c\\d.txt',
+				WIN32_PROJECT,
+				'/a/b/c/d.txt',
+			],
+		])('%s', async (_name, realPath, projectFolder, expected) => {
 			const { toVirtualPath } = await loadTools('win32');
-			expect(toVirtualPath('C:\\Users\\user\\project\\databases', 'C:\\Users\\user\\project')).toBe('/databases');
-		});
-
-		it('converts nested path using forward slashes in output', async () => {
-			const { toVirtualPath } = await loadTools('win32');
-			expect(
-				toVirtualPath('C:\\Users\\user\\project\\databases\\schemas\\public.sql', 'C:\\Users\\user\\project'),
-			).toBe('/databases/schemas/public.sql');
-		});
-
-		it('converts project folder itself to /', async () => {
-			const { toVirtualPath } = await loadTools('win32');
-			expect(toVirtualPath('C:\\Users\\user\\project', 'C:\\Users\\user\\project')).toBe('/');
-		});
-
-		it('works with forward-slash project folder', async () => {
-			const { toVirtualPath } = await loadTools('win32');
-			expect(toVirtualPath('C:\\Users\\user\\project\\agent', 'C:/Users/user/project')).toBe('/agent');
+			expect(toVirtualPath(realPath, projectFolder)).toBe(expected);
 		});
 
 		it('rejects paths outside project folder', async () => {
 			const { toVirtualPath } = await loadTools('win32');
-			expect(() => toVirtualPath('C:\\Windows\\system32', 'C:\\Users\\user\\project')).toThrow(
-				'outside the project folder',
-			);
-		});
-
-		it('returns forward slashes even for deeply nested Windows paths', async () => {
-			const { toVirtualPath } = await loadTools('win32');
-			expect(toVirtualPath('C:\\Users\\user\\project\\a\\b\\c\\d.txt', 'C:\\Users\\user\\project')).toBe(
-				'/a/b/c/d.txt',
-			);
+			expect(() => toVirtualPath('C:\\Windows\\system32', WIN32_PROJECT)).toThrow('outside the project folder');
 		});
 	});
 });
 
-// ---------------------------------------------------------------------------
-// isWithinProjectFolder
-// ---------------------------------------------------------------------------
-
 describe('isWithinProjectFolder', () => {
 	describe('posix', () => {
-		it('returns true for paths inside project folder', async () => {
+		it.each([
+			['returns true for paths inside project folder', '/home/user/project/databases', true],
+			['returns true for the project folder itself', POSIX_PROJECT, true],
+			['returns false for paths outside project folder', '/etc/passwd', false],
+			['returns false for sibling with matching prefix', '/home/user/project-other/file', false],
+			['returns false for excluded .meta directory', '/home/user/project/.meta/data', false],
+		])('%s', async (_name, candidatePath, expected) => {
 			const { isWithinProjectFolder } = await loadTools('posix');
-			expect(isWithinProjectFolder('/home/user/project/databases', '/home/user/project')).toBe(true);
-		});
-
-		it('returns true for the project folder itself', async () => {
-			const { isWithinProjectFolder } = await loadTools('posix');
-			expect(isWithinProjectFolder('/home/user/project', '/home/user/project')).toBe(true);
-		});
-
-		it('returns false for paths outside project folder', async () => {
-			const { isWithinProjectFolder } = await loadTools('posix');
-			expect(isWithinProjectFolder('/etc/passwd', '/home/user/project')).toBe(false);
-		});
-
-		it('returns false for sibling with matching prefix', async () => {
-			const { isWithinProjectFolder } = await loadTools('posix');
-			expect(isWithinProjectFolder('/home/user/project-other/file', '/home/user/project')).toBe(false);
-		});
-
-		it('returns false for excluded .meta directory', async () => {
-			const { isWithinProjectFolder } = await loadTools('posix');
-			expect(isWithinProjectFolder('/home/user/project/.meta/data', '/home/user/project')).toBe(false);
+			expect(isWithinProjectFolder(candidatePath, POSIX_PROJECT)).toBe(expected);
 		});
 	});
 
 	describe('win32', () => {
-		it('returns true for paths inside project folder', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('C:\\Users\\user\\project\\databases', 'C:\\Users\\user\\project')).toBe(true);
-		});
-
-		it('returns true with forward-slash project folder', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('C:\\Users\\user\\project\\databases', 'C:/Users/user/project')).toBe(true);
-		});
-
-		it('returns true for the project folder itself', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('C:\\Users\\user\\project', 'C:\\Users\\user\\project')).toBe(true);
-		});
-
-		it('returns true for project folder itself with mixed slashes', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('C:\\Users\\user\\project', 'C:/Users/user/project')).toBe(true);
-		});
-
-		it('returns false for paths outside project folder', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('C:\\Windows\\system32', 'C:\\Users\\user\\project')).toBe(false);
-		});
-
-		it('returns false for sibling with matching prefix', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('C:\\Users\\user\\project-other\\file', 'C:\\Users\\user\\project')).toBe(
+		it.each([
+			[
+				'returns true for paths inside project folder',
+				'C:\\Users\\user\\project\\databases',
+				WIN32_PROJECT,
+				true,
+			],
+			[
+				'returns true with forward-slash project folder',
+				'C:\\Users\\user\\project\\databases',
+				WIN32_FORWARD_SLASH_PROJECT,
+				true,
+			],
+			['returns true for the project folder itself', WIN32_PROJECT, WIN32_PROJECT, true],
+			[
+				'returns true for project folder itself with mixed slashes',
+				WIN32_PROJECT,
+				WIN32_FORWARD_SLASH_PROJECT,
+				true,
+			],
+			['returns false for paths outside project folder', 'C:\\Windows\\system32', WIN32_PROJECT, false],
+			[
+				'returns false for sibling with matching prefix',
+				'C:\\Users\\user\\project-other\\file',
+				WIN32_PROJECT,
 				false,
-			);
-		});
-
-		it('returns false for different drive', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('D:\\project\\file', 'C:\\Users\\user\\project')).toBe(false);
-		});
-
-		it('returns false for excluded .meta directory', async () => {
-			const { isWithinProjectFolder } = await loadTools('win32');
-			expect(isWithinProjectFolder('C:\\Users\\user\\project\\.meta\\data', 'C:\\Users\\user\\project')).toBe(
+			],
+			['returns false for different drive', 'D:\\project\\file', WIN32_PROJECT, false],
+			[
+				'returns false for excluded .meta directory',
+				'C:\\Users\\user\\project\\.meta\\data',
+				WIN32_PROJECT,
 				false,
-			);
+			],
+		])('%s', async (_name, candidatePath, projectFolder, expected) => {
+			const { isWithinProjectFolder } = await loadTools('win32');
+			expect(isWithinProjectFolder(candidatePath, projectFolder)).toBe(expected);
 		});
 	});
 });
@@ -298,10 +230,6 @@ describe('built-in path exclusions', () => {
 		expect(isInExcludedDir('/home/user/project/.MeTa/file.txt')).toBe(true);
 	});
 });
-
-// ---------------------------------------------------------------------------
-// storage mount
-// ---------------------------------------------------------------------------
 
 describe('storage mount', () => {
 	const PROJECT = '/srv/project';
@@ -364,45 +292,9 @@ describe('storage mount', () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// loadNaoignorePatterns cache invalidation
-// ---------------------------------------------------------------------------
-
 describe('loadNaoignorePatterns cache invalidation', () => {
-	async function loadToolsWithFs(files: { content: string; mtimeMs: number; size?: number }[]) {
-		vi.resetModules();
-
-		const pathModule = await import('path');
-		const impl = pathModule.posix;
-		vi.doMock('path', () => ({ ...impl, default: impl }));
-
-		let callIndex = 0;
-		const nextFile = () => {
-			const file = files[Math.min(callIndex, files.length - 1)];
-			callIndex += 1;
-			return file;
-		};
-
-		const statSync = () => {
-			const file = nextFile();
-			return { mtimeMs: file.mtimeMs, size: file.size ?? file.content.length };
-		};
-		const readFileSync = () => nextFile().content;
-
-		vi.doMock('fs', () => ({
-			default: { existsSync: () => true, readFileSync, statSync },
-			existsSync: () => true,
-			readFileSync,
-			statSync,
-		}));
-
-		const tools = await import('../../src/utils/tools');
-		tools.clearNaoignoreCache();
-		return tools;
-	}
-
 	it('returns cached patterns when the file signature is unchanged', async () => {
-		const { loadNaoignorePatterns } = await loadToolsWithFs([
+		const { loadNaoignorePatterns } = await loadToolsWithNaoignoreFiles([
 			{ content: 'templates/\n', mtimeMs: 1000 },
 			{ content: 'templates/\n', mtimeMs: 1000 },
 			{ content: 'templates/\n', mtimeMs: 1000 },
@@ -413,7 +305,7 @@ describe('loadNaoignorePatterns cache invalidation', () => {
 	});
 
 	it('reloads patterns when the file mtime changes', async () => {
-		const { loadNaoignorePatterns } = await loadToolsWithFs([
+		const { loadNaoignorePatterns } = await loadToolsWithNaoignoreFiles([
 			{ content: 'templates/\n', mtimeMs: 1000 },
 			{ content: 'templates/\n', mtimeMs: 1000 },
 			{ content: '*.j2\ntests/\n', mtimeMs: 2000 },
@@ -425,7 +317,7 @@ describe('loadNaoignorePatterns cache invalidation', () => {
 	});
 
 	it('reloads patterns when the file size changes', async () => {
-		const { loadNaoignorePatterns } = await loadToolsWithFs([
+		const { loadNaoignorePatterns } = await loadToolsWithNaoignoreFiles([
 			{ content: 'templates/\n', mtimeMs: 1000, size: 11 },
 			{ content: 'templates/\n', mtimeMs: 1000, size: 11 },
 			{ content: 'tests/\n', mtimeMs: 1000, size: 7 },
@@ -436,3 +328,47 @@ describe('loadNaoignorePatterns cache invalidation', () => {
 		expect(loadNaoignorePatterns('/project')).toEqual(['tests/']);
 	});
 });
+
+/** Imports the tools module with the posix or win32 `path` implementation and an empty `fs` (no .naoignore). */
+async function loadTools(variant: 'posix' | 'win32') {
+	const statSync = () => {
+		const err = new Error('ENOENT') as NodeJS.ErrnoException;
+		err.code = 'ENOENT';
+		throw err;
+	};
+	return importToolsWith(variant, {
+		existsSync: () => false,
+		readFileSync: () => '',
+		realpathSync: statSync,
+		statSync,
+	});
+}
+
+/** Each `fs` read or stat call consumes the next file, the last one being repeated. */
+async function loadToolsWithNaoignoreFiles(files: { content: string; mtimeMs: number; size?: number }[]) {
+	let callIndex = 0;
+	const nextFile = () => {
+		const file = files[Math.min(callIndex, files.length - 1)];
+		callIndex += 1;
+		return file;
+	};
+
+	const statSync = () => {
+		const file = nextFile();
+		return { mtimeMs: file.mtimeMs, size: file.size ?? file.content.length };
+	};
+	return importToolsWith('posix', { existsSync: () => true, readFileSync: () => nextFile().content, statSync });
+}
+
+async function importToolsWith(variant: 'posix' | 'win32', fsFunctions: Record<string, unknown>) {
+	vi.resetModules();
+
+	const pathModule = await import('path');
+	const impl = pathModule[variant];
+	vi.doMock('path', () => ({ ...impl, default: impl }));
+	vi.doMock('fs', () => ({ default: fsFunctions, ...fsFunctions }));
+
+	const tools = await import('../../src/utils/tools');
+	tools.clearNaoignoreCache();
+	return tools;
+}

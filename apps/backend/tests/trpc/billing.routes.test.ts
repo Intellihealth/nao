@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const testState = vi.hoisted(() => ({
 	billing: null as Record<string, unknown> | null,
 	billingEnabled: true,
@@ -87,15 +89,16 @@ import { router } from '../../src/trpc/trpc';
 import { HandlerError } from '../../src/utils/error';
 
 const testRouter = router({ billing: billingRoutes });
+const REQUEST_ID = 'c7cc1630-972f-4e2a-a412-9ef6c0e59ef9';
+
+beforeEach(() => {
+	testState.billing = null;
+	testState.billingEnabled = true;
+	testState.membership = null;
+	vi.clearAllMocks();
+});
 
 describe('billing.getAccess', () => {
-	beforeEach(() => {
-		testState.billing = null;
-		testState.billingEnabled = true;
-		testState.membership = null;
-		vi.clearAllMocks();
-	});
-
 	it('returns minimal entitlement state to organization members', async () => {
 		const trialEndsAt = new Date('2099-10-05T00:00:00.000Z');
 		testState.membership = membership(
@@ -159,10 +162,6 @@ describe('billing.getAccess', () => {
 
 describe('billing.getStatus', () => {
 	beforeEach(() => {
-		testState.billing = null;
-		testState.billingEnabled = true;
-		testState.membership = null;
-		vi.clearAllMocks();
 		stripeMocks.getBillingPlans.mockResolvedValue({
 			availablePlans: {
 				monthly: cloudPlan(250_000),
@@ -311,9 +310,7 @@ describe('billing.getStatus', () => {
 
 describe('billing.createTrialCheckoutSession', () => {
 	beforeEach(() => {
-		testState.billingEnabled = true;
 		testState.membership = membership({});
-		vi.clearAllMocks();
 		stripeMocks.createCustomer.mockResolvedValue({ id: 'cus_cloud' });
 		stripeMocks.attachCustomer.mockResolvedValue({
 			orgId: 'org-id',
@@ -385,12 +382,10 @@ describe('billing.createTrialCheckoutSession', () => {
 
 describe('billing management mutations', () => {
 	beforeEach(() => {
-		testState.billingEnabled = true;
 		testState.membership = membership({
 			stripeCustomerId: 'cus_cloud',
 			stripeSubscriptionId: 'sub_cloud',
 		});
-		vi.clearAllMocks();
 		stripeMocks.createPaymentMethod.mockResolvedValue('https://billing.stripe.com/payment-method');
 		stripeMocks.createPortal.mockResolvedValue('https://billing.stripe.com/session');
 		stripeMocks.createResubscribe.mockResolvedValue('https://checkout.stripe.com/subscription');
@@ -464,28 +459,24 @@ describe('billing management mutations', () => {
 	});
 
 	it('opens the Stripe Customer Portal', async () => {
-		const requestId = 'c7cc1630-972f-4e2a-a412-9ef6c0e59ef9';
-
-		await expect(caller().billing.createPortalSession({ requestId })).resolves.toEqual({
+		await expect(caller().billing.createPortalSession({ requestId: REQUEST_ID })).resolves.toEqual({
 			url: 'https://billing.stripe.com/session',
 		});
 		expect(stripeService.createCloudPortalSession).toHaveBeenCalledWith({
 			organizationId: 'org-id',
 			stripeCustomerId: 'cus_cloud',
-			requestId,
+			requestId: REQUEST_ID,
 		});
 	});
 
 	it('opens Stripe payment-method management', async () => {
-		const requestId = 'c7cc1630-972f-4e2a-a412-9ef6c0e59ef9';
-
-		await expect(caller().billing.createPaymentMethodSession({ requestId })).resolves.toEqual({
+		await expect(caller().billing.createPaymentMethodSession({ requestId: REQUEST_ID })).resolves.toEqual({
 			url: 'https://billing.stripe.com/payment-method',
 		});
 		expect(stripeService.createCloudPaymentMethodSession).toHaveBeenCalledWith({
 			organizationId: 'org-id',
 			stripeCustomerId: 'cus_cloud',
-			requestId,
+			requestId: REQUEST_ID,
 		});
 	});
 
@@ -575,13 +566,13 @@ describe('billing management mutations', () => {
 	});
 
 	it('requests an idempotent paused-subscription resume', async () => {
-		await expect(
-			caller().billing.resumeSubscription({ requestId: 'c7cc1630-972f-4e2a-a412-9ef6c0e59ef9' }),
-		).resolves.toEqual({ pending: true });
+		await expect(caller().billing.resumeSubscription({ requestId: REQUEST_ID })).resolves.toEqual({
+			pending: true,
+		});
 		expect(stripeService.resumeCloudSubscription).toHaveBeenCalledWith({
 			organizationId: 'org-id',
 			stripeSubscriptionId: 'sub_cloud',
-			requestId: 'c7cc1630-972f-4e2a-a412-9ef6c0e59ef9',
+			requestId: REQUEST_ID,
 		});
 	});
 
@@ -590,9 +581,7 @@ describe('billing management mutations', () => {
 			new stripeService.CloudSubscriptionResumeError('Subscription cannot be resumed'),
 		);
 
-		await expect(
-			caller().billing.resumeSubscription({ requestId: 'c7cc1630-972f-4e2a-a412-9ef6c0e59ef9' }),
-		).rejects.toMatchObject({
+		await expect(caller().billing.resumeSubscription({ requestId: REQUEST_ID })).rejects.toMatchObject({
 			code: 'BAD_REQUEST',
 			message: 'Subscription cannot be resumed',
 		});
@@ -600,14 +589,7 @@ describe('billing management mutations', () => {
 });
 
 function caller(selectedProjectId: string | null = null, selectedOrganizationId: string | null = null) {
-	return testRouter.createCaller({
-		session: {
-			user: { id: 'user-id', name: 'Admin', email: 'admin@example.com' },
-			session: { token: 'session-token' },
-		},
-		selectedProjectId,
-		selectedOrganizationId,
-	} as never);
+	return createTestCaller(testRouter, { selectedProjectId, selectedOrganizationId });
 }
 
 function anonymousCaller() {

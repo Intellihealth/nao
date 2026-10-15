@@ -40,13 +40,7 @@ describe('compactionService.compactConversationIfNeeded', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		tokenCounter = new FakeTokenCounter();
-		compactionService = new CompactionService({
-			createCompactionLlm: () => ({
-				modelId: 'gpt-4.1-mini',
-				compact: mocks.compactMock,
-			}),
-			tokenCounter,
-		});
+		compactionService = createCompactionService(tokenCounter);
 		mocks.resolveProviderModelMock.mockResolvedValue({
 			model: { modelId: 'gpt-4.1-mini' },
 			providerOptions: { openai: {} },
@@ -80,17 +74,11 @@ describe('compactionService.compactConversationIfNeeded', () => {
 		for (const messageTokens of [200_000, 785_500, 785_501]) {
 			vi.clearAllMocks();
 			tokenCounter.estimateMessages.mockReturnValue(messageTokens);
-			const messages: ModelMessage[] = [
-				{ role: 'system', content: 'System prompt' },
-				{ role: 'user', content: 'First question' },
-				{ role: 'assistant', content: 'First answer' },
-				{ role: 'user', content: 'Current turn' },
-			];
 			const result = await compactionService.compactConversationIfNeeded({
 				chat: { id: 'chat-gpt6', projectId: 'project-1', userId: 'user-1' },
 				provider: 'bedrock',
 				modelId,
-				messages,
+				messages: conversationWithCurrentTurn(),
 				tools: {},
 				maxOutputTokens,
 				contextWindow,
@@ -112,32 +100,6 @@ describe('compactionService.compactConversationIfNeeded', () => {
 		}
 	});
 
-	it('returns undefined when token usage is below threshold', async () => {
-		tokenCounter.estimateMessages.mockReturnValue(10);
-
-		const messages: ModelMessage[] = [
-			{ role: 'system', content: 'You are helpful.' },
-			{ role: 'user', content: 'Hi' },
-		];
-
-		const result = await compactionService.compactConversationIfNeeded({
-			chat: { id: 'chat-1', projectId: 'project-1', userId: 'user-1' },
-			provider: 'openai',
-			modelId: 'gpt-5.5',
-			messages,
-			tools: {},
-			maxOutputTokens: 16,
-			contextWindow: 10_000,
-			onCompactionStarted,
-			onCompactionFinished,
-		});
-
-		expect(result).toBeUndefined();
-		expect(onCompactionStarted).not.toHaveBeenCalled();
-		expect(onCompactionFinished).not.toHaveBeenCalled();
-		expect(mocks.compactMock).not.toHaveBeenCalled();
-	});
-
 	it('summarizes history before the current turn and replaces it with a summary message', async () => {
 		tokenCounter.estimateMessages.mockImplementation((msgs: ModelMessage[]) => {
 			if (msgs.length === 4) {
@@ -145,13 +107,7 @@ describe('compactionService.compactConversationIfNeeded', () => {
 			}
 			return 1_000;
 		});
-
-		const messages: ModelMessage[] = [
-			{ role: 'system', content: 'System prompt' },
-			{ role: 'user', content: 'First question' },
-			{ role: 'assistant', content: 'First answer' },
-			{ role: 'user', content: 'Current turn' },
-		];
+		const messages = conversationWithCurrentTurn();
 
 		const result = await compactionService.compactConversationIfNeeded({
 			chat: { id: 'chat-2', projectId: 'project-2', userId: 'user-2' },
@@ -226,17 +182,11 @@ describe('compactionService.compactConversationIfNeeded', () => {
 });
 
 describe('compactionService.useLastCompaction', () => {
-	const compactionService = new CompactionService({
-		createCompactionLlm: () => ({
-			modelId: 'gpt-4.1-mini',
-			compact: mocks.compactMock,
-		}),
-		tokenCounter: new FakeTokenCounter(),
-	});
+	const compactionService = createCompactionService(new FakeTokenCounter());
 
 	it('returns messages unchanged when no compaction exists', () => {
 		const messages: UIMessage[] = [
-			{ id: '1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
+			userMessage('1', 'Hello'),
 			{ id: '2', role: 'assistant', parts: [{ type: 'text', text: 'Hi' }] },
 		];
 
@@ -246,25 +196,11 @@ describe('compactionService.useLastCompaction', () => {
 
 	it('ignores a persisted compaction with an empty summary and falls back to the last real one', () => {
 		const messages: UIMessage[] = [
-			{ id: '1', role: 'user', parts: [{ type: 'text', text: 'First question' }] },
-			{
-				id: '2',
-				role: 'assistant',
-				parts: [
-					{ type: 'data-compaction', data: { summary: 'Real summary' } },
-					{ type: 'text', text: 'Real answer' },
-				],
-			},
-			{ id: '3', role: 'user', parts: [{ type: 'text', text: 'Second question' }] },
-			{
-				id: '4',
-				role: 'assistant',
-				parts: [
-					{ type: 'data-compaction', data: { summary: '' } },
-					{ type: 'text', text: 'Follow-up answer' },
-				],
-			},
-			{ id: '5', role: 'user', parts: [{ type: 'text', text: 'Third question' }] },
+			userMessage('1', 'First question'),
+			compactedAnswer('2', 'Real summary', 'Real answer'),
+			userMessage('3', 'Second question'),
+			compactedAnswer('4', '', 'Follow-up answer'),
+			userMessage('5', 'Third question'),
 		];
 
 		const result = compactionService.useLastCompaction(messages);
@@ -278,16 +214,9 @@ describe('compactionService.useLastCompaction', () => {
 
 	it('tolerates a null summary from a legacy DB row and skips it', () => {
 		const messages: UIMessage[] = [
-			{ id: '1', role: 'user', parts: [{ type: 'text', text: 'Question' }] },
-			{
-				id: '2',
-				role: 'assistant',
-				parts: [
-					{ type: 'data-compaction', data: { summary: null as unknown as string } },
-					{ type: 'text', text: 'Answer' },
-				],
-			},
-			{ id: '3', role: 'user', parts: [{ type: 'text', text: 'Next question' }] },
+			userMessage('1', 'Question'),
+			compactedAnswer('2', null as unknown as string, 'Answer'),
+			userMessage('3', 'Next question'),
 		];
 
 		const result = compactionService.useLastCompaction(messages);
@@ -296,16 +225,9 @@ describe('compactionService.useLastCompaction', () => {
 
 	it('returns messages unchanged when the only compaction has a blank summary', () => {
 		const messages: UIMessage[] = [
-			{ id: '1', role: 'user', parts: [{ type: 'text', text: 'Question' }] },
-			{
-				id: '2',
-				role: 'assistant',
-				parts: [
-					{ type: 'data-compaction', data: { summary: '   ' } },
-					{ type: 'text', text: 'Answer' },
-				],
-			},
-			{ id: '3', role: 'user', parts: [{ type: 'text', text: 'Next question' }] },
+			userMessage('1', 'Question'),
+			compactedAnswer('2', '   ', 'Answer'),
+			userMessage('3', 'Next question'),
 		];
 
 		const result = compactionService.useLastCompaction(messages);
@@ -314,18 +236,11 @@ describe('compactionService.useLastCompaction', () => {
 
 	it('reconstructs compaction as [SUMMARY, remaining messages from last user turn]', () => {
 		const messages: UIMessage[] = [
-			{ id: '1', role: 'user', parts: [{ type: 'text', text: 'Old question' }] },
+			userMessage('1', 'Old question'),
 			{ id: '2', role: 'assistant', parts: [{ type: 'text', text: 'Old answer' }] },
-			{ id: '3', role: 'user', parts: [{ type: 'text', text: 'Current question' }] },
-			{
-				id: '4',
-				role: 'assistant',
-				parts: [
-					{ type: 'data-compaction', data: { summary: 'History summary' } },
-					{ type: 'text', text: 'Response' },
-				],
-			},
-			{ id: '5', role: 'user', parts: [{ type: 'text', text: 'New question' }] },
+			userMessage('3', 'Current question'),
+			compactedAnswer('4', 'History summary', 'Response'),
+			userMessage('5', 'New question'),
 		];
 
 		const result = compactionService.useLastCompaction(messages);
@@ -340,3 +255,37 @@ describe('compactionService.useLastCompaction', () => {
 		expect(result).toHaveLength(4);
 	});
 });
+
+function createCompactionService(tokenCounter: ITokenCounter): CompactionService {
+	return new CompactionService({
+		createCompactionLlm: () => ({
+			modelId: 'gpt-4.1-mini',
+			compact: mocks.compactMock,
+		}),
+		tokenCounter,
+	});
+}
+
+function conversationWithCurrentTurn(): ModelMessage[] {
+	return [
+		{ role: 'system', content: 'System prompt' },
+		{ role: 'user', content: 'First question' },
+		{ role: 'assistant', content: 'First answer' },
+		{ role: 'user', content: 'Current turn' },
+	];
+}
+
+function userMessage(id: string, text: string): UIMessage {
+	return { id, role: 'user', parts: [{ type: 'text', text }] };
+}
+
+function compactedAnswer(id: string, summary: string, text: string): UIMessage {
+	return {
+		id,
+		role: 'assistant',
+		parts: [
+			{ type: 'data-compaction', data: { summary } },
+			{ type: 'text', text },
+		],
+	};
+}

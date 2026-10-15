@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createTestCaller } from '../helpers/trpc-caller';
+
 const mocks = vi.hoisted(() => ({
 	getMemberBudget: vi.fn(),
 	getUserRoleInProject: vi.fn(),
@@ -29,6 +31,7 @@ import { memberBudgetRoutes } from '../../src/trpc/member-budget.routes';
 import { router } from '../../src/trpc/trpc';
 
 const testRouter = router(memberBudgetRoutes);
+const caller = createTestCaller(testRouter);
 
 describe('member budget routes', () => {
 	beforeEach(() => {
@@ -42,27 +45,20 @@ describe('member budget routes', () => {
 	it('rejects member budget changes without the enterprise license', async () => {
 		mocks.hasFeature.mockResolvedValue(false);
 
-		await expect(createCaller().setPersonalBudget({ userId: 'member-id', limitUsd: 100 })).rejects.toMatchObject({
+		await expect(caller.setPersonalBudget({ userId: 'member-id', limitUsd: 100 })).rejects.toMatchObject({
 			code: 'FORBIDDEN',
 		});
 		expect(mocks.setPersonalBudget).not.toHaveBeenCalled();
 	});
 
 	it('refuses to read or write the budget of a user outside the project', async () => {
-		await expect(createCaller().getForMember({ userId: 'outsider-id' })).rejects.toMatchObject({
+		await expect(caller.getForMember({ userId: 'outsider-id' })).rejects.toMatchObject({
 			code: 'NOT_FOUND',
 		});
-		await expect(createCaller().setPersonalBudget({ userId: 'outsider-id', limitUsd: 100 })).rejects.toMatchObject({
+		await expect(caller.setPersonalBudget({ userId: 'outsider-id', limitUsd: 100 })).rejects.toMatchObject({
 			code: 'NOT_FOUND',
 		});
 		expect(mocks.getMemberBudget).not.toHaveBeenCalled();
 		expect(mocks.setPersonalBudget).not.toHaveBeenCalled();
 	});
 });
-
-function createCaller() {
-	return testRouter.createCaller({
-		session: { user: { id: 'user-id', name: 'Test User', email: 'test@example.com' } },
-		selectedProjectId: 'project-id',
-	} as never);
-}

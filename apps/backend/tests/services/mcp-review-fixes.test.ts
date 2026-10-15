@@ -52,26 +52,23 @@ describe('MCP OpenAPI extraction', () => {
 
 describe('MCP spec file paths', () => {
 	it('keeps remote tool names inside the server spec directory', () => {
-		const service = new McpService() as unknown as {
-			_projectPath: string;
-			_toolFilePath: (server: string, tool: string) => string;
-		};
-		service._projectPath = '/tmp/project';
-
-		const filePath = service._toolFilePath('server', '../../../secrets');
+		const filePath = createServiceInProject()._toolFilePath('server', '../../../secrets');
 
 		expect(filePath).toBe(resolve('/tmp/project/agent/mcps/server/..%2F..%2F..%2Fsecrets.json'));
 	});
 
 	it('rejects server names that escape the MCP specs directory', () => {
+		expect(() => createServiceInProject()._toolFilePath('../outside', 'tool')).toThrow('escapes');
+	});
+
+	function createServiceInProject() {
 		const service = new McpService() as unknown as {
 			_projectPath: string;
 			_toolFilePath: (server: string, tool: string) => string;
 		};
 		service._projectPath = '/tmp/project';
-
-		expect(() => service._toolFilePath('../outside', 'tool')).toThrow('escapes');
-	});
+		return service;
+	}
 });
 
 describe('MCP argument validation', () => {

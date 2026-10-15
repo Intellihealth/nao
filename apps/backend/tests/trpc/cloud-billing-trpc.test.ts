@@ -30,6 +30,11 @@ const testRouter = router({
 		)
 		.query(() => 'ok'),
 });
+const caller = testRouter.createCaller({
+	session: null,
+	selectedProjectId: null,
+	selectedOrganizationId: null,
+} as never);
 
 describe('cloud billing tRPC middleware', () => {
 	beforeEach(() => {
@@ -37,7 +42,7 @@ describe('cloud billing tRPC middleware', () => {
 	});
 
 	it('checks organization access once when an organization is resolved', async () => {
-		await expect(caller().run({ organizationId: 'organization-1', projectId: 'project-1' })).resolves.toBe('ok');
+		await expect(caller.run({ organizationId: 'organization-1', projectId: 'project-1' })).resolves.toBe('ok');
 
 		expect(mocks.assertOrganizationCloudBillingAccess).toHaveBeenCalledOnce();
 		expect(mocks.assertOrganizationCloudBillingAccess).toHaveBeenCalledWith('organization-1');
@@ -45,7 +50,7 @@ describe('cloud billing tRPC middleware', () => {
 	});
 
 	it('checks project access once when only a project is resolved', async () => {
-		await expect(caller().run({ projectId: 'project-1' })).resolves.toBe('ok');
+		await expect(caller.run({ projectId: 'project-1' })).resolves.toBe('ok');
 
 		expect(mocks.assertProjectCloudBillingAccess).toHaveBeenCalledOnce();
 		expect(mocks.assertProjectCloudBillingAccess).toHaveBeenCalledWith('project-1');
@@ -53,7 +58,7 @@ describe('cloud billing tRPC middleware', () => {
 	});
 
 	it('fails closed when a required scope has no organization or project', async () => {
-		await expect(caller().run({})).rejects.toEqual(
+		await expect(caller.run({})).rejects.toEqual(
 			new TRPCError({ code: 'NOT_FOUND', message: 'Cloud billing organization was not found' }),
 		);
 
@@ -62,17 +67,9 @@ describe('cloud billing tRPC middleware', () => {
 	});
 
 	it('allows procedures that explicitly resolve no billing scope', async () => {
-		await expect(caller().run({ skip: true })).resolves.toBe('ok');
+		await expect(caller.run({ skip: true })).resolves.toBe('ok');
 
 		expect(mocks.assertOrganizationCloudBillingAccess).not.toHaveBeenCalled();
 		expect(mocks.assertProjectCloudBillingAccess).not.toHaveBeenCalled();
 	});
 });
-
-function caller() {
-	return testRouter.createCaller({
-		session: null,
-		selectedProjectId: null,
-		selectedOrganizationId: null,
-	} as never);
-}
