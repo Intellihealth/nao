@@ -43,7 +43,7 @@ export function OnboardingCommandToolCall({ toolPart }: ToolCallComponentProps<'
 	}
 
 	return (
-		<div className='flex flex-col gap-3'>
+		<div className='-mx-3 flex flex-col gap-3'>
 			<CommandBlock command={command} />
 			{isSettled && needsConfirmation && (
 				<div className='flex flex-col gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3'>

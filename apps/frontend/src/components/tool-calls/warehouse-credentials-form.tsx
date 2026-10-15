@@ -60,8 +60,8 @@ export function WarehouseCredentialsForm({
 				<TextField
 					form={form}
 					name='name'
-					label='Connection Name'
-					placeholder={settings.defaultName}
+					label='Name'
+					placeholder='e.g. Production analytics'
 					required={true}
 				/>
 			</section>
@@ -84,6 +84,7 @@ export function WarehouseCredentialsForm({
 								form={form}
 								name='datasetId'
 								label='Dataset ID'
+								hint='(optional)'
 								placeholder='Enter your dataset ID'
 								required={false}
 							/>
@@ -101,6 +102,7 @@ export function WarehouseCredentialsForm({
 								form={form}
 								name='location'
 								label='Location'
+								hint='(optional)'
 								placeholder='Enter your location'
 								required={false}
 							/>

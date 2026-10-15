@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, PencilRuler, Database, Paperclip, AlertTriangle, Shield, Check } from 'lucide-react';
 import { ATTACHMENT_ACCEPT } from '@nao/shared/attachments';
@@ -117,6 +117,7 @@ function ChatInputBase({
 		submitQueuedMessageNow,
 		error,
 		selectedModel,
+		mode,
 	} = useAgentContext();
 	const navigate = useNavigate();
 	const { canChatWithNaoData } = usePermissions();
@@ -138,10 +139,13 @@ function ChatInputBase({
 		navigate({ to: '/', search: { admin: true } });
 	}, [adminModeLocked, isAdminMode, setAdminMode, navigate]);
 	const { canCycleModels, cycleModel } = useModelSelection();
+	const project = useQuery(trpc.project.getCurrent.queryOptions());
+	const isTrial = useIsCloud() && project.data === null;
 	const uploadLimits = useQuery(trpc.storage.getUploadLimits.queryOptions());
 	const attachmentUpload = useAttachmentUpload({
 		documentsEnabled: uploadLimits.data?.enabled,
 		maxDocumentSizeMb: uploadLimits.data?.maxFileSizeMb ?? 0,
+		disabled: isTrial,
 	});
 	const chatInputRestore = useChatInputRestore(!!allowQueueing);
 	const effectivePlaceholder =
@@ -445,6 +449,7 @@ function ChatInputBase({
 						type='file'
 						accept={ATTACHMENT_ACCEPT}
 						multiple
+						disabled={isTrial}
 						className='hidden'
 						onChange={attachmentUpload.handleFileInputChange}
 					/>
@@ -455,22 +460,25 @@ function ChatInputBase({
 						{isTranscribeReady && isRecording && <SlidingWaveform analyserRef={analyserRef} />}
 
 						<div className='flex items-center gap-1.5 md:gap-2 ml-auto relative'>
-							<ChatInputPlusMenu
-								hasDatabases={hasDatabases}
-								hasSkills={hasSkills}
-								canChatWithNaoData={canChatWithNaoData}
-								isAdminMode={isAdminMode}
-								adminModeLocked={adminModeLocked}
-								onSelectAdminMode={handleSelectAdminMode}
-								onAddAttachment={attachmentUpload.openFilePicker}
-								storyMentions={storyMentionOptions}
-								onAddStory={(mention) => {
-									promptRef.current?.appendMention({ id: mention.id, label: mention.label }, '#');
-								}}
-								onOpenSkills={openSkillsMenu}
-								onOpenDatabase={openDatabaseMenu}
-								onFocusPrompt={() => promptRef.current?.focus()}
-							/>
+							{mode !== 'onboarding' && (
+								<ChatInputPlusMenu
+									hasDatabases={hasDatabases}
+									hasSkills={hasSkills}
+									storyMentions={storyMentionOptions}
+									canChatWithNaoData={canChatWithNaoData}
+									isAdminMode={isAdminMode}
+									adminModeLocked={adminModeLocked}
+									isTrial={isTrial}
+									onSelectAdminMode={handleSelectAdminMode}
+									onAddAttachment={attachmentUpload.openFilePicker}
+									onAddStory={(mention) => {
+										promptRef.current?.appendMention({ id: mention.id, label: mention.label }, '#');
+									}}
+									onOpenSkills={openSkillsMenu}
+									onOpenDatabase={openDatabaseMenu}
+									onFocusPrompt={() => promptRef.current?.focus()}
+								/>
+							)}
 
 							{onCancel && (
 								<Button variant='ghost' type='button' size='sm' onClick={onCancel}>
@@ -693,6 +701,7 @@ function ChatInputPlusMenu({
 	canChatWithNaoData,
 	isAdminMode,
 	adminModeLocked,
+	isTrial,
 	onSelectAdminMode,
 	onAddAttachment,
 	onAddStory,
@@ -706,6 +715,7 @@ function ChatInputPlusMenu({
 	canChatWithNaoData: boolean;
 	isAdminMode: boolean;
 	adminModeLocked: boolean;
+	isTrial: boolean;
 	onSelectAdminMode: () => void;
 	onAddAttachment: () => void;
 	onAddStory: (mention: MentionOption) => void;
@@ -713,15 +723,6 @@ function ChatInputPlusMenu({
 	onOpenDatabase: () => void;
 	onFocusPrompt: () => void;
 }) {
-	const locationPath = useRouterState({ select: (s) => s.location.pathname });
-
-	if (locationPath === '/onboarding') {
-		return null;
-	}
-
-	const project = useQuery(trpc.project.getCurrent.queryOptions());
-	const isTrial = useIsCloud() && project.data === null;
-
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>

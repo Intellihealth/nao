@@ -36,7 +36,6 @@ export type WarehouseCredentialField =
 
 interface SqlProviderSettings {
 	label: string;
-	defaultName: string;
 	defaultPort: number;
 	schemaHint?: string;
 	defaultHttpScheme?: 'http' | 'https';
@@ -62,7 +61,6 @@ export const WAREHOUSE_PROVIDER_LABELS: Record<requestWarehouseCredentials.Provi
 export const SQL_PROVIDER_SETTINGS: Record<SqlProvider, SqlProviderSettings> = {
 	athena: {
 		label: 'Amazon Athena',
-		defaultName: 'athena-prod',
 		defaultPort: 443,
 		fields: [
 			'database',
@@ -76,76 +74,64 @@ export const SQL_PROVIDER_SETTINGS: Record<SqlProvider, SqlProviderSettings> = {
 	},
 	bigquery: {
 		label: 'BigQuery',
-		defaultName: 'bigquery-prod',
 		defaultPort: 443,
 		fields: ['gcpProjectId', 'datasetId', 'serviceAccountJson', 'location'],
 	},
 	clickhouse: {
 		label: 'ClickHouse',
-		defaultName: 'clickhouse-prod',
 		defaultPort: 8123,
 		fields: ['host', 'port', 'database', 'user', 'password', 'protocol', 'secure'],
 	},
 	databricks: {
 		label: 'Databricks',
-		defaultName: 'databricks-prod',
 		defaultPort: 443,
 		fields: ['serverHostname', 'httpPath', 'accessToken', 'catalog', 'schemaName'],
 	},
 	fabric: {
 		label: 'Fabric',
-		defaultName: 'fabric-prod',
 		defaultPort: 1433,
 		fields: ['host', 'port', 'database', 'clientId', 'clientSecret', 'tenantId'],
 	},
 	motherduck: {
 		label: 'MotherDuck',
-		defaultName: 'motherduck-prod',
 		defaultPort: 443,
 		fields: ['accessToken', 'database'],
 	},
 	mssql: {
 		label: 'Microsoft SQL Server',
-		defaultName: 'mssql-prod',
 		defaultPort: 1433,
 		fields: ['host', 'port', 'database', 'user', 'password', 'schemaName', 'driver'],
 	},
 	mysql: {
 		label: 'MySQL',
-		defaultName: 'mysql-prod',
 		defaultPort: 3306,
 		schemaHint: '(optional)',
 		fields: ['host', 'port', 'database', 'user', 'password', 'schemaName'],
 	},
 	postgres: {
 		label: 'Postgres',
-		defaultName: 'postgres-prod',
 		defaultPort: 5432,
 		schemaHint: '(optional, uses public by default)',
 		fields: ['host', 'port', 'database', 'user', 'password', 'schemaName'],
 	},
 	redshift: {
 		label: 'Amazon Redshift',
-		defaultName: 'redshift-prod',
 		defaultPort: 5439,
 		schemaHint: '(optional, uses public by default)',
 		fields: ['host', 'port', 'database', 'user', 'password', 'schemaName'],
 	},
 	snowflake: {
 		label: 'Snowflake',
-		defaultName: 'snowflake-prod',
 		defaultPort: 443,
 		fields: ['database', 'user', 'password', 'schemaName', 'warehouse', 'accountId'],
 	},
 	starrocks: {
 		label: 'StarRocks',
-		defaultName: 'starrocks-prod',
 		defaultPort: 9030,
 		fields: ['catalog', 'host', 'port', 'database', 'user', 'password', 'schemaName'],
 	},
 	trino: {
 		label: 'Trino',
-		defaultName: 'trino-prod',
 		defaultPort: 8080,
 		defaultHttpScheme: 'http',
 		fields: ['catalog', 'host', 'port', 'httpScheme', 'user', 'password', 'schemaName'],

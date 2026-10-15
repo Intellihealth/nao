@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fsSync from 'node:fs';
 import path from 'node:path';
 
+import { CONTEXT_CONFIG_FILENAME } from '@nao/shared';
 import type {
 	ContextGitUnavailableReason,
 	FileContentResponse,
@@ -236,6 +237,7 @@ function buildSearchArguments(query: string, projectFolder: string): string[] {
 	for (const exclusionGlob of BUILT_IN_EXCLUSION_GLOBS) {
 		args.push('--glob', exclusionGlob);
 	}
+	args.push('--glob', `!${CONTEXT_CONFIG_FILENAME}`, '--glob', `!**/${CONTEXT_CONFIG_FILENAME}`);
 
 	for (const ignorePattern of loadNaoignorePatterns(projectFolder)) {
 		const cleanPattern = ignorePattern.endsWith('/') ? ignorePattern.slice(0, -1) : ignorePattern;
@@ -365,7 +367,11 @@ async function readDirectoryRecursive(dirPath: string, projectFolder: string): P
 	const dirEntries = await fs.readdir(dirPath, { withFileTypes: true });
 
 	const parentRelativePath = path.relative(projectFolder, dirPath);
-	const filtered = dirEntries.filter((entry) => !shouldExcludeEntry(entry.name, parentRelativePath, projectFolder));
+	const filtered = dirEntries.filter(
+		(entry) =>
+			entry.name.toLowerCase() !== CONTEXT_CONFIG_FILENAME &&
+			!shouldExcludeEntry(entry.name, parentRelativePath, projectFolder),
+	);
 
 	const entries: FileTreeEntry[] = [];
 

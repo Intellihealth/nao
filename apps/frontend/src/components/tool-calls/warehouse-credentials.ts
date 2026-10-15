@@ -53,7 +53,7 @@ export function getWarehouseCredentialsDefaults(provider: SqlProvider): Warehous
 	const settings = SQL_PROVIDER_SETTINGS[provider];
 
 	return {
-		name: settings.defaultName,
+		name: '',
 		host: 'localhost',
 		port: String(settings.defaultPort),
 		database: provider === 'clickhouse' ? 'default' : '',

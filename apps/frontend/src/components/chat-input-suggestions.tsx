@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Activity, MessageSquare, X, ThumbsDown, ThumbsUp, Check, Plug } from 'lucide-react';
-import { useRouterState } from '@tanstack/react-router';
 import { FeedbackDialog } from './chat-messages/assistant-message-actions';
 import { Button } from './ui/button';
 import StoryIcon from './ui/story-icon';
@@ -500,10 +499,9 @@ interface ConversationFeedback {
 }
 
 function useConversationFeedback(): ConversationFeedback {
-	const { isRunning } = useAgentContext();
+	const { isRunning, mode } = useAgentContext();
 	const messages = useAgentMessages();
 	const chatId = useChatId();
-	const locationPath = useRouterState({ select: (s) => s.location.pathname });
 
 	const [dismissCount, setDismissCount] = useState(() => feedbackDismissCountStorage.get() ?? 0);
 	const [dismissedChats, setDismissedChats] = useState<ReadonlySet<string>>(
@@ -543,7 +541,13 @@ function useConversationFeedback(): ConversationFeedback {
 	const isPersistedChat = !!chatId && chatId !== NEW_CHAT_ID;
 	const isDismissed = !!chatId && dismissedChats.has(chatId);
 	const hasFeedback = !!lastAssistantMessage?.feedback;
-	const isEligible = isPersistedChat && !isRunning && !!lastAssistantMessage && !hasFeedback && !isDismissed;
+	const isEligible =
+		mode !== 'onboarding' &&
+		isPersistedChat &&
+		!isRunning &&
+		!!lastAssistantMessage &&
+		!hasFeedback &&
+		!isDismissed;
 
 	const isTriggered = useInactivityTrigger({
 		enabled: isEligible,
@@ -600,7 +604,7 @@ function useConversationFeedback(): ConversationFeedback {
 	}, [dismissForChat]);
 
 	return {
-		isVisible: isEligible && isTriggered && locationPath !== '/onboarding',
+		isVisible: isEligible && isTriggered,
 		showThanks,
 		isPending: submitFeedback.isPending,
 		vote,

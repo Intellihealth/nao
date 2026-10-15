@@ -236,6 +236,10 @@ describe('buildWarehouseCredentials', () => {
 });
 
 describe('warehouse port defaults', () => {
+	it('leaves the connection name empty', () => {
+		expect(getWarehouseCredentialsDefaults('postgres').name).toBe('');
+	});
+
 	it.each([
 		['http', false, 8123],
 		['http', true, 8443],

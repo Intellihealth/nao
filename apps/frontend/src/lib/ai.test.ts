@@ -155,6 +155,18 @@ describe('areGroupedMessagePartsEqual', () => {
 	});
 });
 
+describe('onboarding command grouping', () => {
+	it.each(['compact', 'detailed'] as const)('keeps commands outside the explored group in %s mode', (density) => {
+		const readPart = createToolPart({ type: 'tool-read', toolName: 'read' }) as UIMessagePart;
+		const commandPart = createToolPart({
+			type: 'tool-onboarding_command',
+			toolName: 'onboarding_command',
+		}) as UIMessagePart;
+
+		expect(groupToolCalls([readPart, commandPart, readPart], density)).toEqual([readPart, commandPart, readPart]);
+	});
+});
+
 describe('progress updates', () => {
 	it('collapses a progress update into the tool group like any reasoning', () => {
 		const readPart = createToolPart({ type: 'tool-read', toolName: 'read' }) as UIMessagePart;

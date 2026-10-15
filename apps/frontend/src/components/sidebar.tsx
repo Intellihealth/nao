@@ -8,12 +8,10 @@ import {
 	PlusIcon,
 	SearchIcon,
 	OctagonAlert,
-	Store,
 	Wrench,
 	X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { SYSTEM_EXAMPLE_PROJECT_ID } from '@nao/shared';
 import { ProjectSwitcher } from './project-selector';
 import { ChatFilterMenu } from './sidebar-chat-filter-menu';
 import { ChatListItem } from './sidebar-chat-list-item';
@@ -52,7 +50,6 @@ export function Sidebar() {
 	const matchRoute = useMatchRoute();
 	const { isCollapsed, isMobile, isMobileOpen, closeMobile, toggle: toggleSidebar } = useSidebar();
 	const [toggleHintOpen, setToggleHintOpen] = useState(false);
-	const [showExampleHistory, setShowExampleHistory] = useState(false);
 	const { fire: openCommandMenu } = useCommandMenuCallback();
 	const project = useQuery(trpc.project.getCurrent.queryOptions());
 	const projects = useQuery(trpc.project.listForCurrentUser.queryOptions());
@@ -62,8 +59,6 @@ export function Sidebar() {
 	const customColor = branding.enabled ? branding.brandColor : null;
 	const { isAdmin, isContextAdmin, isOrgAdmin, isViewer } = usePermissions();
 	const isCloud = useIsCloud();
-	const hasActiveProject = project.isSuccess && project.data !== null;
-	const showJaffleShopTab = isCloud && hasActiveProject;
 	const showProjectSetupCard = isCloud && project.isSuccess && project.data === null && !isViewer;
 	const betaAutomationsEnabled = config.data?.betaAutomationsEnabled === true;
 	const showAutomations = !isViewer && betaAutomationsEnabled;
@@ -294,21 +289,10 @@ export function Sidebar() {
 						filters={filters}
 						isViewer={isViewer}
 						isTrial={project.isSuccess && project.data === null}
-						separateExampleChats={showJaffleShopTab}
 					/>
 				</>
 			)}
 
-			{!isInSettings && showJaffleShopTab && (
-				<JaffleShopHistory
-					isViewer={isViewer}
-					isCollapsed={effectiveIsCollapsed}
-					isOpen={showExampleHistory}
-					groupBy={groupBy}
-					filters={filters}
-					onToggle={() => setShowExampleHistory((isOpen) => !isOpen)}
-				/>
-			)}
 			{showProjectSetupCard && locationPath !== '/onboarding' && !effectiveIsCollapsed && (
 				<div className='px-2'>
 					<SidebarProjectSetupCard />
@@ -459,14 +443,12 @@ function SidebarNav({
 	filters,
 	isViewer,
 	isTrial,
-	separateExampleChats,
 }: {
 	isCollapsed: boolean;
 	groupBy: ChatGroupBy;
 	filters: ChatFilterType[];
 	isViewer: boolean;
 	isTrial: boolean;
-	separateExampleChats: boolean;
 }) {
 	const groupedChats = useQuery({
 		...trpc.chat.listGrouped.queryOptions({ groupBy, filters }),
@@ -492,14 +474,7 @@ function SidebarNav({
 
 	const groups = groupedChats.data?.groups.map((group) => ({
 		...group,
-		chats: group.chats.filter((chat) => {
-			const belongsInMainHistory =
-				!separateExampleChats || chat.projectId !== SYSTEM_EXAMPLE_PROJECT_ID || chat.isOnboarding;
-
-			const isPinnedAttentionChat = onboardingNeedsAttention && chat.id === onboardingChatId;
-
-			return belongsInMainHistory && !isPinnedAttentionChat;
-		}),
+		chats: group.chats.filter((chat) => !(onboardingNeedsAttention && chat.id === onboardingChatId)),
 	}));
 
 	const showAttentionChat = onboardingNeedsAttention ? onboardingChat : undefined;
@@ -548,74 +523,6 @@ function SidebarNav({
 						</>
 					)}
 				</p>
-			)}
-		</div>
-	);
-}
-
-function JaffleShopHistory({
-	isViewer,
-	isCollapsed,
-	isOpen,
-	groupBy,
-	filters,
-	onToggle,
-}: {
-	isViewer: boolean;
-	isCollapsed: boolean;
-	isOpen: boolean;
-	groupBy: ChatGroupBy;
-	filters: ChatFilterType[];
-	onToggle: () => void;
-}) {
-	const groupedChats = useQuery({
-		...trpc.chat.listGrouped.queryOptions({ groupBy, filters }),
-		placeholderData: keepPreviousData,
-	});
-	const groups = groupedChats.data?.groups.map((group) => ({
-		...group,
-		chats: group.chats.filter((chat) => chat.projectId === SYSTEM_EXAMPLE_PROJECT_ID && !chat.isOnboarding),
-	}));
-	const isEmpty = groups?.every((group) => group.chats.length === 0);
-
-	return (
-		<div
-			className={cn(
-				'mx-2 mb-2 shrink-0 overflow-hidden rounded-lg border border-sidebar-border text-foreground',
-				isOpen && 'bg-sidebar-accent/40',
-				hideIf(isCollapsed),
-			)}
-		>
-			<button
-				type='button'
-				aria-expanded={isOpen}
-				onClick={onToggle}
-				className='flex w-full items-center gap-2 px-3 py-2 text-sm font-medium transition-colors hover:bg-sidebar-accent'
-			>
-				<Store className='size-4 shrink-0 text-primary' />
-				<span className='truncate'>Jaffle Shop</span>
-				<span className='ml-auto text-[10px] font-semibold uppercase tracking-wide text-primary/70' />
-				<ChevronRight className={cn('size-3.5 shrink-0 transition-transform', isOpen && 'rotate-90')} />
-			</button>
-			{isOpen && (
-				<div className='max-h-56 overflow-y-auto border-t border-sidebar-border bg-sidebar py-1 text-foreground'>
-					{!isViewer && (
-						<Link
-							to='/'
-							search={{ example: true }}
-							className='mx-2 flex items-center gap-2 rounded-full px-2 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-sidebar-accent'
-						>
-							<PlusIcon className='size-3.5' />
-							New chat
-						</Link>
-					)}
-					{groups?.map((group) => (
-						<GroupSection key={group.label} group={group} groupBy={groupBy} storageNamespace='example' />
-					))}
-					{isEmpty && (
-						<p className='px-3 py-4 text-center text-xs text-muted-foreground'>No Jaffle Shop chats yet.</p>
-					)}
-				</div>
 			)}
 		</div>
 	);
@@ -736,18 +643,13 @@ function GroupSection({
 	groupBy,
 	attentionChatId,
 	resumeOnboardingChatId,
-	storageNamespace,
 }: {
 	group: ChatGroup;
 	groupBy: ChatGroupBy;
 	attentionChatId?: string;
 	resumeOnboardingChatId?: string;
-	storageNamespace?: string;
 }) {
-	const storageKey = storageNamespace
-		? `section:${storageNamespace}:chat-group:${group.label}`
-		: `section:chat-group:${group.label}`;
-	const { isOpen, toggle } = useSidebarSectionOpen(storageKey);
+	const { isOpen, toggle } = useSidebarSectionOpen(`section:chat-group:${group.label}`);
 	const [expanded, setExpanded] = useState(false);
 	const hasMore = group.chats.length > GROUP_INITIAL_COUNT;
 	const visibleChats = expanded ? group.chats : group.chats.slice(0, GROUP_INITIAL_COUNT);
