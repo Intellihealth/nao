@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { OutputSchema } from './grep';
+import { OutputSchema } from '../src/tools/grep';
 
 describe('grep OutputSchema', () => {
 	it.each([

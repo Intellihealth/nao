@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isTerminalBillingStatus, isTrialAvailable } from './billing';
+import { isTerminalBillingStatus, isTrialAvailable } from '../src/billing';
 
 describe('billing state', () => {
 	it.each([

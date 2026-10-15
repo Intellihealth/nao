@@ -24,7 +24,7 @@ import {
 	type StoredLegacyDatabaseContextAccessV2,
 	unionDatabaseContextAccess,
 	unionFileTreeAccess,
-} from './user-group-context';
+} from '../src/user-group-context';
 
 describe('user group database context access', () => {
 	it('normalizes type casing, duplicates, and order while preserving source names', () => {

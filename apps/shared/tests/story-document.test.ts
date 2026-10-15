@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { STORY_DOCUMENT_SLOTS, type StoryApp } from './story-app';
-import { composeStoryDocument } from './story-document';
+import { STORY_DOCUMENT_SLOTS, type StoryApp } from '../src/story-app';
+import { composeStoryDocument } from '../src/story-document';
 
 const parts = { head: '<meta name="host">', body: '<script>boot()</script>' };
 const { head, body } = STORY_DOCUMENT_SLOTS;

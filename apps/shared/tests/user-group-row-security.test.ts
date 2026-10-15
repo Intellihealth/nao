@@ -9,7 +9,7 @@ import {
 	resolveWarehouseRowSecurity,
 	serializeUserGroupRowPolicies,
 	stripRowSecurityWhereClause,
-} from './user-group-row-security';
+} from '../src/user-group-row-security';
 
 const table = {
 	databaseType: 'duckdb',

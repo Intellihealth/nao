@@ -5,7 +5,7 @@ import {
 	parseStoredUserGroupConfig,
 	serializeUserGroupConfig,
 	USER_GROUP_FEATURES,
-} from './user-group-features';
+} from '../src/user-group-features';
 
 describe('user group configuration', () => {
 	it('uses canonical v2 configuration for new groups', () => {

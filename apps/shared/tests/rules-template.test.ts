@@ -5,7 +5,7 @@ import {
 	isRootRulesPath,
 	renderConditionalGroupBlocks,
 	renderConditionalGroupBlocksWithSourceLines,
-} from './rules-template';
+} from '../src/rules-template';
 
 const licensed = (groupNames: string[]) => ({ enforced: true as const, groupNames });
 const unlicensed = { enforced: false as const };

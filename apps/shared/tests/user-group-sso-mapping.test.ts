@@ -6,7 +6,7 @@ import {
 	normalizeSsoGroupIdentifiers,
 	parseStoredUserGroupSsoMappings,
 	serializeUserGroupSsoMappings,
-} from './user-group-sso-mapping';
+} from '../src/user-group-sso-mapping';
 
 describe('User Group SSO mappings', () => {
 	it('normalizes and deduplicates provider identifiers', () => {
