@@ -65,6 +65,7 @@ afterEach(() => {
 	vi.resetModules();
 	vi.doUnmock('fs');
 	vi.doUnmock('@boxlite-ai/boxlite');
+	vi.doUnmock('@resvg/resvg-js');
 	vi.doUnmock('../src/db/db');
 });
 

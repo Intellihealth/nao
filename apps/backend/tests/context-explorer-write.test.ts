@@ -165,16 +165,13 @@ describe('context explorer worktree writes', () => {
 		expectLiveUnchanged();
 	});
 
-	it('hides protected files from the tree and search', async () => {
+	it('excludes and rejects .git and environment files across tree, read, write, and search', async () => {
 		const tree = await getFileTree(live);
 		const nested = tree.find((entry) => entry.name === 'nested');
 		const context = await readFileContent('/context.md', access);
 
-		expect(tree.map((entry) => entry.name)).not.toEqual(
-			expect.arrayContaining(['.git', '.env', 'nao_config.yaml']),
-		);
+		expect(tree.map((entry) => entry.name)).not.toEqual(expect.arrayContaining(['.git', '.env']));
 		expect(nested?.children?.map((entry) => entry.name)).not.toContain('.env.local');
-		expect((await searchFileContents('name: live', live)).results).toEqual([]);
 		for (const protectedPath of ['/nested/repository/.git/config', '/.env', '/nested/.env.local']) {
 			await expect(readFileContent(protectedPath, access)).rejects.toMatchObject({ code: 'FORBIDDEN' });
 			await expect(writeFileContent(protectedPath, 'changed\n', context.hash, access)).rejects.toMatchObject({

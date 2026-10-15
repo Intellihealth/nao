@@ -991,6 +991,15 @@ export const getChatProjectId = async (chatId: string): Promise<string | undefin
 	return result?.projectId;
 };
 
+export const getActiveChatProjectId = async (chatId: string): Promise<string | undefined> => {
+	const [result] = await db
+		.select({ projectId: s.chat.projectId })
+		.from(s.chat)
+		.where(and(eq(s.chat.id, chatId), isNull(s.chat.deletedAt)))
+		.execute();
+	return result?.projectId;
+};
+
 export const isOnboardingChat = async (chatId: string): Promise<boolean> => {
 	const [result] = await db
 		.select({ id: s.chatMessage.id })
