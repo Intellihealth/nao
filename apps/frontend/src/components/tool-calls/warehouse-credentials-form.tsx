@@ -87,7 +87,7 @@ export function WarehouseCredentialsForm({
 								placeholder='Enter your dataset ID'
 								required={false}
 							/>
-							<div className='sm:col-span-2'>
+							<div className='sm:col-span-2 [&_textarea]:font-sans [&_textarea]:text-sm'>
 								<TextareaField
 									form={form}
 									name='serviceAccountJson'

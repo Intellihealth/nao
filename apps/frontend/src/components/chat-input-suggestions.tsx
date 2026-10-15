@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Activity, MessageSquare, X, ThumbsDown, ThumbsUp, Check, Plug } from 'lucide-react';
+import { useRouterState } from '@tanstack/react-router';
 import { FeedbackDialog } from './chat-messages/assistant-message-actions';
 import { Button } from './ui/button';
 import StoryIcon from './ui/story-icon';
@@ -502,6 +503,7 @@ function useConversationFeedback(): ConversationFeedback {
 	const { isRunning } = useAgentContext();
 	const messages = useAgentMessages();
 	const chatId = useChatId();
+	const locationPath = useRouterState({ select: (s) => s.location.pathname });
 
 	const [dismissCount, setDismissCount] = useState(() => feedbackDismissCountStorage.get() ?? 0);
 	const [dismissedChats, setDismissedChats] = useState<ReadonlySet<string>>(
@@ -598,7 +600,7 @@ function useConversationFeedback(): ConversationFeedback {
 	}, [dismissForChat]);
 
 	return {
-		isVisible: isEligible && isTriggered,
+		isVisible: isEligible && isTriggered && locationPath !== '/onboarding',
 		showThanks,
 		isPending: submitFeedback.isPending,
 		vote,

@@ -134,9 +134,6 @@ export function RequestWarehouseCredentialsToolCall({
 						<Database className='size-5' />
 					</div>
 					<div className='min-w-0'>
-						<div className='mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary'>
-							Action required
-						</div>
 						<div className='font-borna text-lg font-medium tracking-tight text-foreground'>
 							{WAREHOUSE_PROVIDER_LABELS[provider]} credentials required
 						</div>

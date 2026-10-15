@@ -3,6 +3,7 @@ import type { ComponentType, CSSProperties } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { SettingsCard } from '@/components/ui/settings-card';
+import { cn } from '@/lib/utils';
 
 interface ImportProviderCardProps {
 	providerLabel: string;
@@ -12,6 +13,7 @@ interface ImportProviderCardProps {
 	resourceNounSingular: string;
 	resourceNounPlural: string;
 	connected: boolean;
+	compact?: boolean;
 	className?: string;
 	pickerDialogStyle?: CSSProperties;
 	Picker: ComponentType<{
@@ -41,12 +43,62 @@ export function ImportProviderCard({
 	resourceNounSingular,
 	resourceNounPlural,
 	connected,
+	compact = false,
 	className,
 	pickerDialogStyle,
 	Picker,
 	onImported,
 }: ImportProviderCardProps) {
 	const [pickerOpen, setPickerOpen] = useState(false);
+	const picker = (
+		<Picker
+			open={pickerOpen}
+			onOpenChange={setPickerOpen}
+			onImported={onImported}
+			dialogStyle={pickerDialogStyle}
+		/>
+	);
+
+	if (compact) {
+		return (
+			<>
+				<div
+					className={cn(
+						'flex flex-col gap-3 rounded-xl border border-border bg-background p-4 sm:flex-row sm:items-center',
+						className,
+					)}
+				>
+					<div className='flex min-w-0 flex-1 items-center gap-3'>
+						<div className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet/10 text-violet'>
+							<Icon className='size-4' />
+						</div>
+						<div className='min-w-0'>
+							<p className='font-medium text-foreground'>
+								{connected ? `Choose a ${resourceNounSingular}` : 'Add an existing project'}
+							</p>
+							<p className='text-xs text-muted-foreground'>
+								{connected
+									? 'Import it as your nao project.'
+									: `Connect ${providerLabel} and choose a ${resourceNounSingular}.`}
+							</p>
+						</div>
+					</div>
+					{connected ? (
+						<Button size='sm' onClick={() => setPickerOpen(true)}>
+							Browse
+						</Button>
+					) : (
+						<Button size='sm' asChild>
+							<a href={connectHref} target={connectTarget}>
+								Connect
+							</a>
+						</Button>
+					)}
+				</div>
+				{picker}
+			</>
+		);
+	}
 
 	return (
 		<>
@@ -82,12 +134,7 @@ export function ImportProviderCard({
 					</div>
 				)}
 			</SettingsCard>
-			<Picker
-				open={pickerOpen}
-				onOpenChange={setPickerOpen}
-				onImported={onImported}
-				dialogStyle={pickerDialogStyle}
-			/>
+			{picker}
 		</>
 	);
 }

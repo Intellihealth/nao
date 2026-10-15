@@ -5,6 +5,7 @@ import { getSession } from '../auth';
 import { env } from '../env';
 import * as userQueries from '../queries/user.queries';
 import * as githubService from '../services/github';
+import { logger } from '../utils/logger';
 import { convertHeaders } from '../utils/utils';
 
 function signState(payload: string): string {
@@ -69,8 +70,18 @@ export const githubRoutes = async (app: App) => {
 			const token = await githubService.exchangeCodeForToken(code);
 			await userQueries.updateGithubToken(userId, token);
 			return reply.redirect(`${returnTo}?github=connected`);
-		} catch {
-			return reply.redirect(`${returnTo}?github=error&reason=exchange_failed`);
+		} catch (error) {
+			const details = error instanceof Error ? error.message : String(error);
+			logger.error('GitHub OAuth callback failed', {
+				source: 'http',
+				context: { error: details },
+			});
+			const params = new URLSearchParams({
+				github: 'error',
+				reason: 'exchange_failed',
+				details: details.slice(0, 1000),
+			});
+			return reply.redirect(`${returnTo}?${params.toString()}`);
 		}
 	});
 };
