@@ -4,7 +4,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_USAGE_PERIOD_SELECTION, MAX_SAVED_USAGE_PERIODS } from '@nao/backend/usage';
 
+import { deferred } from '../../helpers/deferred';
 import type { SavedUsagePeriod } from '@nao/backend/usage';
+import type { ComponentProps } from 'react';
 import { UsageFilters } from '@/components/settings/usage-filters';
 import { UsagePeriodFilter } from '@/components/settings/usage-period-filter';
 
@@ -14,17 +16,7 @@ describe('UsageFilters', () => {
 	afterEach(cleanup);
 
 	it('shows a neutral label while a saved period is loading', () => {
-		render(
-			<UsagePeriodFilter
-				value={{ mode: 'saved', savedPeriodId: 'year' }}
-				savedPeriods={[]}
-				isLoading
-				onChange={vi.fn()}
-				onCreateSavedPeriod={vi.fn()}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={vi.fn()}
-			/>,
-		);
+		renderPeriodFilter({ value: { mode: 'saved', savedPeriodId: 'year' }, isLoading: true });
 
 		expect(screen.getByRole('button', { name: 'Loading…' }).hasAttribute('disabled')).toBe(true);
 	});
@@ -35,18 +27,9 @@ describe('UsageFilters', () => {
 			days: index + 1,
 			granularity: 'day',
 		}));
-		render(
-			<UsagePeriodFilter
-				value={DEFAULT_USAGE_PERIOD_SELECTION}
-				savedPeriods={savedPeriodsAtLimit}
-				onChange={vi.fn()}
-				onCreateSavedPeriod={vi.fn()}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={vi.fn()}
-			/>,
-		);
+		renderPeriodFilter({ savedPeriods: savedPeriodsAtLimit });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 
 		const addSavedPeriod = screen.getByRole('button', {
 			name: `Saved period limit reached (${MAX_SAVED_USAGE_PERIODS})`,
@@ -58,26 +41,7 @@ describe('UsageFilters', () => {
 
 	it('toggles the split per user view from the toolbar', () => {
 		const onSplitByUserChange = vi.fn();
-		render(
-			<UsageFilters
-				provider='all'
-				onProviderChange={vi.fn()}
-				periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
-				onPeriodSelectionChange={vi.fn()}
-				savedPeriods={[]}
-				onCreateSavedPeriod={vi.fn()}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={vi.fn()}
-				availableProviders={[]}
-				chatFacets={undefined}
-				selectedUserNames={undefined}
-				onSelectedUserNamesChange={vi.fn()}
-				selectedSources={undefined}
-				onSelectedSourcesChange={vi.fn()}
-				splitByUser={false}
-				onSplitByUserChange={onSplitByUserChange}
-			/>,
-		);
+		renderUsageFilters({ splitByUser: false, onSplitByUserChange });
 
 		const toggle = screen.getByRole('button', { name: 'Split per user' });
 		expect(toggle.getAttribute('aria-pressed')).toBe('false');
@@ -88,53 +52,16 @@ describe('UsageFilters', () => {
 	});
 
 	it('hides the split per user toggle when usage controls are hidden', () => {
-		render(
-			<UsageFilters
-				showUsageControls={false}
-				provider='all'
-				onProviderChange={vi.fn()}
-				periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
-				onPeriodSelectionChange={vi.fn()}
-				savedPeriods={[]}
-				onCreateSavedPeriod={vi.fn()}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={vi.fn()}
-				availableProviders={[]}
-				chatFacets={undefined}
-				selectedUserNames={undefined}
-				onSelectedUserNamesChange={vi.fn()}
-				selectedSources={undefined}
-				onSelectedSourcesChange={vi.fn()}
-				splitByUser
-				onSplitByUserChange={vi.fn()}
-			/>,
-		);
+		renderUsageFilters({ showUsageControls: false, splitByUser: true, onSplitByUserChange: vi.fn() });
 
 		expect(screen.queryByRole('button', { name: 'Split per user' })).toBeNull();
 	});
 
 	it('opens an add-period dialog without a maximum day limit', () => {
 		const onCreateSavedPeriod = vi.fn();
-		render(
-			<UsageFilters
-				provider='all'
-				onProviderChange={vi.fn()}
-				periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
-				onPeriodSelectionChange={vi.fn()}
-				savedPeriods={[]}
-				onCreateSavedPeriod={onCreateSavedPeriod}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={vi.fn()}
-				availableProviders={[]}
-				chatFacets={undefined}
-				selectedUserNames={undefined}
-				onSelectedUserNamesChange={vi.fn()}
-				selectedSources={undefined}
-				onSelectedSourcesChange={vi.fn()}
-			/>,
-		);
+		renderUsageFilters({ onCreateSavedPeriod });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 		fireEvent.click(screen.getByRole('button', { name: 'Create filter' }));
 
 		const daysInput = screen.getByRole('spinbutton', { name: 'Days' });
@@ -149,26 +76,9 @@ describe('UsageFilters', () => {
 	});
 
 	it('rejects combinations above the technical bucket limit', () => {
-		render(
-			<UsageFilters
-				provider='all'
-				onProviderChange={vi.fn()}
-				periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
-				onPeriodSelectionChange={vi.fn()}
-				savedPeriods={[]}
-				onCreateSavedPeriod={vi.fn()}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={vi.fn()}
-				availableProviders={[]}
-				chatFacets={undefined}
-				selectedUserNames={undefined}
-				onSelectedUserNamesChange={vi.fn()}
-				selectedSources={undefined}
-				onSelectedSourcesChange={vi.fn()}
-			/>,
-		);
+		renderUsageFilters();
 
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 		fireEvent.click(screen.getByRole('button', { name: 'Create filter' }));
 		const daysInput = screen.getByRole('spinbutton', { name: 'Days' });
 		fireEvent.change(daysInput, { target: { value: '2001' } });
@@ -186,30 +96,13 @@ describe('UsageFilters', () => {
 		const onPeriodSelectionChange = vi.fn();
 		const onUpdateSavedPeriod = vi.fn();
 		const onDeleteSavedPeriod = vi.fn();
-		render(
-			<UsageFilters
-				provider='all'
-				onProviderChange={vi.fn()}
-				periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
-				onPeriodSelectionChange={onPeriodSelectionChange}
-				savedPeriods={savedPeriods}
-				onCreateSavedPeriod={vi.fn()}
-				onUpdateSavedPeriod={onUpdateSavedPeriod}
-				onDeleteSavedPeriod={onDeleteSavedPeriod}
-				availableProviders={[]}
-				chatFacets={undefined}
-				selectedUserNames={undefined}
-				onSelectedUserNamesChange={vi.fn()}
-				selectedSources={undefined}
-				onSelectedSourcesChange={vi.fn()}
-			/>,
-		);
+		renderUsageFilters({ onPeriodSelectionChange, savedPeriods, onUpdateSavedPeriod, onDeleteSavedPeriod });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 		fireEvent.click(screen.getByRole('button', { name: 'Last 365 days - Monthly' }));
 		expect(onPeriodSelectionChange).toHaveBeenCalledWith({ mode: 'saved', savedPeriodId: 'year' });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 		fireEvent.click(screen.getByRole('button', { name: 'Edit Last 365 days - Monthly' }));
 		fireEvent.change(screen.getByRole('spinbutton', { name: 'Days' }), { target: { value: '730' } });
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -220,7 +113,7 @@ describe('UsageFilters', () => {
 		});
 
 		await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit period filter' })).toBeNull());
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 		fireEvent.click(screen.getByRole('button', { name: 'Delete Last 365 days - Monthly' }));
 		fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 		expect(onDeleteSavedPeriod).toHaveBeenCalledWith('year');
@@ -228,26 +121,9 @@ describe('UsageFilters', () => {
 
 	it('keeps the delete dialog open and reports failures', async () => {
 		const onDeleteSavedPeriod = vi.fn().mockRejectedValue(new Error('Delete failed'));
-		render(
-			<UsageFilters
-				provider='all'
-				onProviderChange={vi.fn()}
-				periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
-				onPeriodSelectionChange={vi.fn()}
-				savedPeriods={savedPeriods}
-				onCreateSavedPeriod={vi.fn()}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={onDeleteSavedPeriod}
-				availableProviders={[]}
-				chatFacets={undefined}
-				selectedUserNames={undefined}
-				onSelectedUserNamesChange={vi.fn()}
-				selectedSources={undefined}
-				onSelectedSourcesChange={vi.fn()}
-			/>,
-		);
+		renderUsageFilters({ savedPeriods, onDeleteSavedPeriod });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 		fireEvent.click(screen.getByRole('button', { name: 'Delete Last 365 days - Monthly' }));
 		fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 
@@ -257,39 +133,57 @@ describe('UsageFilters', () => {
 	});
 
 	it('prevents closing the saved period dialog while saving', async () => {
-		let resolveSave: () => void = () => undefined;
-		const onCreateSavedPeriod = vi.fn(
-			() =>
-				new Promise<void>((resolve) => {
-					resolveSave = resolve;
-				}),
-		);
-		render(
-			<UsageFilters
-				provider='all'
-				onProviderChange={vi.fn()}
-				periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
-				onPeriodSelectionChange={vi.fn()}
-				savedPeriods={[]}
-				onCreateSavedPeriod={onCreateSavedPeriod}
-				onUpdateSavedPeriod={vi.fn()}
-				onDeleteSavedPeriod={vi.fn()}
-				availableProviders={[]}
-				chatFacets={undefined}
-				selectedUserNames={undefined}
-				onSelectedUserNamesChange={vi.fn()}
-				selectedSources={undefined}
-				onSelectedSourcesChange={vi.fn()}
-			/>,
-		);
+		const save = deferred<void>();
+		const onCreateSavedPeriod = vi.fn(() => save.promise);
+		renderUsageFilters({ onCreateSavedPeriod });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+		openPeriodMenu();
 		fireEvent.click(screen.getByRole('button', { name: 'Create filter' }));
 		fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 		fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
 		expect(screen.getByRole('dialog', { name: 'Create period filter' })).toBeDefined();
-		await act(async () => resolveSave());
+		await act(async () => save.resolve());
 		await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create period filter' })).toBeNull());
 	});
 });
+
+function renderUsageFilters(overrides: Partial<ComponentProps<typeof UsageFilters>> = {}) {
+	render(
+		<UsageFilters
+			provider='all'
+			onProviderChange={vi.fn()}
+			periodSelection={DEFAULT_USAGE_PERIOD_SELECTION}
+			onPeriodSelectionChange={vi.fn()}
+			savedPeriods={[]}
+			onCreateSavedPeriod={vi.fn()}
+			onUpdateSavedPeriod={vi.fn()}
+			onDeleteSavedPeriod={vi.fn()}
+			availableProviders={[]}
+			chatFacets={undefined}
+			selectedUserNames={undefined}
+			onSelectedUserNamesChange={vi.fn()}
+			selectedSources={undefined}
+			onSelectedSourcesChange={vi.fn()}
+			{...overrides}
+		/>,
+	);
+}
+
+function renderPeriodFilter(overrides: Partial<ComponentProps<typeof UsagePeriodFilter>>) {
+	render(
+		<UsagePeriodFilter
+			value={DEFAULT_USAGE_PERIOD_SELECTION}
+			savedPeriods={[]}
+			onChange={vi.fn()}
+			onCreateSavedPeriod={vi.fn()}
+			onUpdateSavedPeriod={vi.fn()}
+			onDeleteSavedPeriod={vi.fn()}
+			{...overrides}
+		/>,
+	);
+}
+
+function openPeriodMenu() {
+	fireEvent.click(screen.getByRole('button', { name: 'Last 15 days' }));
+}

@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ComponentProps } from 'react';
 import { StoryPageHeader } from '@/components/story-page-header';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -50,9 +51,9 @@ vi.mock('@/main', () => ({
 	},
 }));
 
-describe('StoryPageHeader shared-story refresh control', () => {
-	afterEach(cleanup);
+afterEach(cleanup);
 
+describe('StoryPageHeader shared-story refresh control', () => {
 	it('hides refresh when no refresh capability is provided', () => {
 		renderHeader(false, vi.fn());
 
@@ -70,8 +71,6 @@ describe('StoryPageHeader shared-story refresh control', () => {
 });
 
 describe('StoryPageHeader refresh failure banner', () => {
-	afterEach(cleanup);
-
 	it('shows the refresh failure', () => {
 		renderFailedStory(false);
 
@@ -88,34 +87,14 @@ describe('StoryPageHeader refresh failure banner', () => {
 	});
 });
 
-function renderFailedStory(isRefreshing: boolean) {
-	return render(
-		<TooltipProvider>
-			<StoryPageHeader
-				title='Revenue'
-				live={{
-					isLive: true,
-					lastRefreshFailure: { errorMessage: 'No output generated.', failedAt: new Date() },
-					isRefreshing,
-				}}
-			/>
-		</TooltipProvider>,
-	);
-}
-
 describe('StoryPageHeader actions', () => {
 	beforeEach(() => {
 		favoritesQuery.data = undefined;
 	});
-	afterEach(cleanup);
 
 	it('renders a share button that calls onShare', () => {
 		const onShare = vi.fn();
-		render(
-			<TooltipProvider>
-				<StoryPageHeader title='Revenue' onShare={onShare} />
-			</TooltipProvider>,
-		);
+		renderPageHeader({ title: 'Revenue', onShare });
 
 		fireEvent.click(screen.getByRole('button', { name: 'Share' }));
 
@@ -124,38 +103,37 @@ describe('StoryPageHeader actions', () => {
 
 	it('only shows the header star once the story is favorited', () => {
 		favoritesQuery.data = { storyIds: ['story-1'] };
-		render(
-			<TooltipProvider>
-				<StoryPageHeader title='Revenue' storyId='story-1' />
-			</TooltipProvider>,
-		);
+		renderPageHeader({ title: 'Revenue', storyId: 'story-1' });
 
 		expect(screen.getByRole('button', { name: 'Unfavorite' })).toBeDefined();
 	});
 
 	it('hides the header star when the story is not favorited', () => {
-		render(
-			<TooltipProvider>
-				<StoryPageHeader title='Revenue' storyId='story-1' />
-			</TooltipProvider>,
-		);
+		renderPageHeader({ title: 'Revenue', storyId: 'story-1' });
 
 		expect(screen.queryByRole('button', { name: 'Unfavorite' })).toBeNull();
 	});
 });
 
 function renderHeader(canRefresh: boolean, onRefresh: () => void) {
-	return render(
+	renderPageHeader({ title: 'Revenue', authorName: 'Test User', live: { isLive: true, canRefresh, onRefresh } });
+}
+
+function renderFailedStory(isRefreshing: boolean) {
+	renderPageHeader({
+		title: 'Revenue',
+		live: {
+			isLive: true,
+			lastRefreshFailure: { errorMessage: 'No output generated.', failedAt: new Date() },
+			isRefreshing,
+		},
+	});
+}
+
+function renderPageHeader(props: ComponentProps<typeof StoryPageHeader>) {
+	render(
 		<TooltipProvider>
-			<StoryPageHeader
-				title='Revenue'
-				authorName='Test User'
-				live={{
-					isLive: true,
-					canRefresh,
-					onRefresh,
-				}}
-			/>
+			<StoryPageHeader {...props} />
 		</TooltipProvider>,
 	);
 }

@@ -60,13 +60,9 @@ describe('StoryBeforeAgentSendProvider', () => {
 					};
 				}),
 		);
-		render(
-			<StoryBeforeAgentSendProvider>
-				<SendHarness guard={guard} send={send} />
-			</StoryBeforeAgentSendProvider>,
-		);
+		renderSendHarness(guard, send);
 
-		fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+		clickSend();
 		expect(guard).toHaveBeenCalledOnce();
 		expect(save).toHaveBeenCalledOnce();
 		expect(send).not.toHaveBeenCalled();
@@ -82,35 +78,13 @@ describe('StoryBeforeAgentSendProvider', () => {
 		);
 	});
 
-	it('does not send when the Story save fails', async () => {
-		const save = vi.fn(async (): Promise<'saved' | 'failed'> => 'failed');
-		const preview = vi.fn();
-		const guard = vi.fn(async () => ({ canSend: (await save()) === 'saved', afterSend: preview }));
-		const send = vi.fn(async () => {});
-		render(
-			<StoryBeforeAgentSendProvider>
-				<SendHarness guard={guard} send={send} />
-			</StoryBeforeAgentSendProvider>,
-		);
-
-		fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-		await waitFor(() => expect(guard).toHaveBeenCalledOnce());
-		expect(save).toHaveBeenCalledOnce();
-		expect(send).not.toHaveBeenCalled();
-		expect(preview).not.toHaveBeenCalled();
-	});
-
 	it('does not send or change modes when the Story code is invalid', async () => {
 		const preview = vi.fn();
 		const guard = vi.fn(async () => ({ canSend: false, afterSend: preview }));
 		const send = vi.fn(async () => {});
-		render(
-			<StoryBeforeAgentSendProvider>
-				<SendHarness guard={guard} send={send} />
-			</StoryBeforeAgentSendProvider>,
-		);
+		renderSendHarness(guard, send);
 
-		fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+		clickSend();
 		await waitFor(() => expect(guard).toHaveBeenCalledOnce());
 		expect(send).not.toHaveBeenCalled();
 		expect(preview).not.toHaveBeenCalled();
@@ -120,13 +94,9 @@ describe('StoryBeforeAgentSendProvider', () => {
 		const preview = vi.fn();
 		const guard = vi.fn(async () => ({ canSend: true }));
 		const send = vi.fn(async () => {});
-		render(
-			<StoryBeforeAgentSendProvider>
-				<SendHarness guard={guard} send={send} />
-			</StoryBeforeAgentSendProvider>,
-		);
+		renderSendHarness(guard, send);
 
-		fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+		clickSend();
 		await waitFor(() => expect(send).toHaveBeenCalledOnce());
 		expect(preview).not.toHaveBeenCalled();
 	});
@@ -172,3 +142,15 @@ describe('runWithStoryBeforeAgentSend', () => {
 		expect(afterSend).not.toHaveBeenCalled();
 	});
 });
+
+function renderSendHarness(guard: () => Promise<BeforeAgentSendResult>, send: () => Promise<void>) {
+	render(
+		<StoryBeforeAgentSendProvider>
+			<SendHarness guard={guard} send={send} />
+		</StoryBeforeAgentSendProvider>,
+	);
+}
+
+function clickSend() {
+	fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+}

@@ -45,6 +45,14 @@ const objects = [
 	{ databaseType: 'postgres', database: 'app', schema: 'public', table: 'users' },
 	{ databaseType: 'postgres', database: 'app', schema: 'public', table: 'orders' },
 ];
+const branchedObjects = [...objects, { databaseType: 'postgres', database: 'app', schema: 'audit', table: 'events' }];
+const staleEvents: DatabaseTableGrant = {
+	kind: 'table',
+	databaseType: 'snowflake',
+	database: 'warehouse',
+	schema: 'raw',
+	table: 'events',
+};
 const docsEntries = [
 	{ kind: 'folder' as const, path: 'finance' },
 	{ kind: 'file' as const, path: 'finance/kpis.md' },
@@ -52,24 +60,14 @@ const docsEntries = [
 ];
 
 beforeEach(() => {
-	mocks.useQuery.mockReturnValue({
-		isLoading: false,
-		isError: false,
-		data: { syncState: 'ready', objects },
-		refetch: vi.fn(),
-	});
+	setCatalogObjects(objects);
 });
 
 afterEach(cleanup);
 
 describe('user group context access selection', () => {
 	it('keeps the access controls visible while the catalog loads', () => {
-		mocks.useQuery.mockReturnValue({
-			isLoading: true,
-			isError: false,
-			data: undefined,
-			refetch: vi.fn(),
-		});
+		mocks.useQuery.mockReturnValue(unavailableCatalog('loading'));
 
 		render(<UserGroupContextAccess databaseAccess={empty} onDatabaseAccessChange={vi.fn()} />);
 
@@ -84,12 +82,7 @@ describe('user group context access selection', () => {
 	});
 
 	it('shows catalog states but hides search while Everything is selected', () => {
-		mocks.useQuery.mockReturnValue({
-			isLoading: true,
-			isError: false,
-			data: undefined,
-			refetch: vi.fn(),
-		});
+		mocks.useQuery.mockReturnValue(unavailableCatalog('loading'));
 
 		render(
 			<UserGroupContextAccess databaseAccess={{ mode: 'all', strict: true }} onDatabaseAccessChange={vi.fn()} />,
@@ -101,12 +94,7 @@ describe('user group context access selection', () => {
 	});
 
 	it('keeps the access controls visible when the catalog fails', () => {
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: true,
-			data: undefined,
-			refetch: vi.fn(),
-		});
+		mocks.useQuery.mockReturnValue(unavailableCatalog('error'));
 
 		render(<UserGroupContextAccess databaseAccess={empty} onDatabaseAccessChange={vi.fn()} />);
 
@@ -270,16 +258,7 @@ describe('user group context access selection', () => {
 	});
 
 	it('keeps docs usable when the database catalog fails', () => {
-		mocks.useQuery.mockImplementation((options) =>
-			options === mocks.docsQueryOptions
-				? {
-						isLoading: false,
-						isError: false,
-						data: { syncState: 'ready', entries: docsEntries },
-						refetch: vi.fn(),
-					}
-				: { isLoading: false, isError: true, data: undefined, refetch: vi.fn() },
-		);
+		setCombinedCatalogs(unavailableCatalog('error'));
 		render(<StatefulCombinedContextAccess />);
 
 		expect(screen.getByText('Failed to load')).toBeTruthy();
@@ -380,10 +359,7 @@ describe('user group context access selection', () => {
 	});
 
 	it('keeps database and schema rows separate when schemas branch', () => {
-		setCatalogObjects([
-			...objects,
-			{ databaseType: 'postgres', database: 'app', schema: 'audit', table: 'events' },
-		]);
+		setCatalogObjects(branchedObjects);
 		render(<StatefulContextAccess />);
 
 		fireEvent.click(screen.getByRole('button', { name: 'Expand app database' }));
@@ -394,10 +370,7 @@ describe('user group context access selection', () => {
 	});
 
 	it('marks a branched database and its schema partial for descendant access', () => {
-		setCatalogObjects([
-			...objects,
-			{ databaseType: 'postgres', database: 'app', schema: 'audit', table: 'events' },
-		]);
+		setCatalogObjects(branchedObjects);
 		render(
 			<StatefulContextAccess
 				initialAccess={{ mode: 'restricted', strict: true, grants: [users], patterns: [] }}
@@ -422,10 +395,7 @@ describe('user group context access selection', () => {
 	});
 
 	it('highlights a branched database root in Everything mode', () => {
-		setCatalogObjects([
-			...objects,
-			{ databaseType: 'postgres', database: 'app', schema: 'audit', table: 'events' },
-		]);
+		setCatalogObjects(branchedObjects);
 		render(<StatefulContextAccess initialAccess={{ mode: 'all', strict: true }} />);
 
 		const databaseRow = screen.getByRole('button', { name: 'Expand app database' });
@@ -550,14 +520,6 @@ describe('user group context access selection', () => {
 	});
 
 	it('counts only matching synced tables without overlap', () => {
-		const stale: DatabaseTableGrant = {
-			kind: 'table',
-			databaseType: 'snowflake',
-			database: 'warehouse',
-			schema: 'raw',
-			table: 'events',
-		};
-
 		expect(getDatabaseContextTableSelectionSummary(empty, objects)).toBe('0 tables');
 		expect(
 			getDatabaseContextTableSelectionSummary(
@@ -580,7 +542,7 @@ describe('user group context access selection', () => {
 		expect(getDatabaseContextTableSelectionSummary({ mode: 'all', strict: true }, objects)).toBe('2 tables');
 		expect(
 			getDatabaseContextTableSelectionSummary(
-				{ mode: 'restricted', strict: true, grants: [stale], patterns: [] },
+				{ mode: 'restricted', strict: true, grants: [staleEvents], patterns: [] },
 				objects,
 			),
 		).toBe('0 tables');
@@ -611,10 +573,7 @@ describe('user group context access selection', () => {
 		const access: DatabaseContextAccess = {
 			mode: 'restricted',
 			strict: true,
-			grants: [
-				schema,
-				{ kind: 'table', databaseType: 'snowflake', database: 'warehouse', schema: 'raw', table: 'events' },
-			],
+			grants: [schema, staleEvents],
 			patterns: [],
 		};
 
@@ -622,9 +581,7 @@ describe('user group context access selection', () => {
 			getUnavailableDatabaseContextGrants(access, [
 				{ databaseType: 'postgres', database: 'app', schema: 'public', table: 'orders' },
 			]),
-		).toEqual([
-			{ kind: 'table', databaseType: 'snowflake', database: 'warehouse', schema: 'raw', table: 'events' },
-		]);
+		).toEqual([staleEvents]);
 	});
 
 	it('searches source type, database, schema, and table without changing objects', () => {
@@ -663,29 +620,22 @@ function StatefulCombinedContextAccess({
 	);
 }
 
-function setCatalogObjects(catalogObjects: typeof objects) {
-	mocks.useQuery.mockReturnValue({
-		isLoading: false,
-		isError: false,
-		data: { syncState: 'ready', objects: catalogObjects },
-		refetch: vi.fn(),
-	});
+function setCatalogObjects(catalogObjects: typeof branchedObjects) {
+	mocks.useQuery.mockReturnValue(readyCatalog({ syncState: 'ready', objects: catalogObjects }));
 }
 
-function setCombinedCatalogs() {
+function setCombinedCatalogs(databaseCatalog: object = readyCatalog({ syncState: 'ready', objects })) {
 	mocks.useQuery.mockImplementation((options) =>
 		options === mocks.docsQueryOptions
-			? {
-					isLoading: false,
-					isError: false,
-					data: { syncState: 'ready', entries: docsEntries },
-					refetch: vi.fn(),
-				}
-			: {
-					isLoading: false,
-					isError: false,
-					data: { syncState: 'ready', objects },
-					refetch: vi.fn(),
-				},
+			? readyCatalog({ syncState: 'ready', entries: docsEntries })
+			: databaseCatalog,
 	);
+}
+
+function readyCatalog(data: Record<string, unknown>) {
+	return { isLoading: false, isError: false, data, refetch: vi.fn() };
+}
+
+function unavailableCatalog(state: 'loading' | 'error') {
+	return { isLoading: state === 'loading', isError: state === 'error', data: undefined, refetch: vi.fn() };
 }

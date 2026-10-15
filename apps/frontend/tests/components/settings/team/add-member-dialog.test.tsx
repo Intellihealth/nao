@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubResizeObserver } from '../../../helpers/browser-stubs';
+import { openDropdownMenu } from '../../../helpers/dropdown-menu';
 import { AddMemberDialog } from '@/components/settings/team/add-member-dialog';
 
 const groupOptions = [
@@ -12,15 +14,7 @@ const groupOptions = [
 	{ id: 'finance', name: 'Finance', isDefault: false },
 ];
 
-beforeEach(() => {
-	vi.stubGlobal(
-		'ResizeObserver',
-		vi.fn(() => ({
-			observe: vi.fn(),
-			disconnect: vi.fn(),
-		})),
-	);
-});
+beforeEach(stubResizeObserver);
 
 afterEach(() => {
 	cleanup();
@@ -39,8 +33,7 @@ describe('AddMemberDialog groups', () => {
 		).toBe('true');
 		fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Analysts' }));
 		closeGroupPicker();
-		fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
-		fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
+		submitEmail('person@example.com');
 
 		await waitFor(() =>
 			expect(onSubmit).toHaveBeenCalledWith({
@@ -55,11 +48,8 @@ describe('AddMemberDialog groups', () => {
 		const onSubmit = vi.fn().mockResolvedValueOnce({ needsName: true }).mockResolvedValueOnce({});
 		render(<AddMemberDialog open onOpenChange={vi.fn()} groupOptions={groupOptions} onSubmit={onSubmit} />);
 
-		openGroupPicker();
-		fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Finance' }));
-		closeGroupPicker();
-		fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'new@example.com' } });
-		fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
+		pickGroup('Finance');
+		submitEmail('new@example.com');
 		await screen.findByLabelText('Name');
 
 		fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New User' } });
@@ -76,9 +66,7 @@ describe('AddMemberDialog groups', () => {
 	it('resets selected groups when closed and reopened', () => {
 		render(<DialogHarness onSubmit={vi.fn().mockResolvedValue({})} />);
 
-		openGroupPicker();
-		fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Analysts' }));
-		closeGroupPicker();
+		pickGroup('Analysts');
 		fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 		fireEvent.click(screen.getByRole('button', { name: 'Open dialog' }));
 		openGroupPicker();
@@ -90,11 +78,8 @@ describe('AddMemberDialog groups', () => {
 		const onSubmit = vi.fn().mockResolvedValue({});
 		render(<DialogHarness onSubmit={onSubmit} />);
 
-		openGroupPicker();
-		fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Analysts' }));
-		closeGroupPicker();
-		fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
-		fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
+		pickGroup('Analysts');
+		submitEmail('person@example.com');
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
 		fireEvent.click(screen.getByRole('button', { name: 'Open dialog' }));
@@ -108,8 +93,7 @@ describe('AddMemberDialog groups', () => {
 
 		expect(screen.queryByText('Groups')).toBeNull();
 		expect(screen.queryByRole('button', { name: /Select user groups/ })).toBeNull();
-		fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'member@example.com' } });
-		fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
+		submitEmail('member@example.com');
 
 		await waitFor(() =>
 			expect(onSubmit).toHaveBeenCalledWith({
@@ -154,13 +138,21 @@ function DialogHarness({ onSubmit }: { onSubmit: () => Promise<Record<string, ne
 	);
 }
 
+function pickGroup(name: string) {
+	openGroupPicker();
+	fireEvent.click(screen.getByRole('menuitemcheckbox', { name }));
+	closeGroupPicker();
+}
+
 function openGroupPicker() {
-	fireEvent.pointerDown(screen.getByRole('button', { name: /Select user groups/ }), {
-		button: 0,
-		ctrlKey: false,
-	});
+	openDropdownMenu(/Select user groups/);
 }
 
 function closeGroupPicker() {
 	fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+}
+
+function submitEmail(email: string) {
+	fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } });
+	fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
 }

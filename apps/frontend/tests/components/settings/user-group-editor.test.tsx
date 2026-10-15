@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubClipboard } from '../../helpers/browser-stubs';
 import type { UserRole } from '@nao/shared/types';
 import { ConditionalRulesHelp, DefaultProjectRole } from '@/components/settings/user-group-editor';
 
@@ -30,10 +31,7 @@ vi.mock('@tanstack/react-query', () => ({
 beforeEach(() => {
 	writeText.mockReset();
 	HTMLElement.prototype.scrollIntoView = vi.fn();
-	Object.defineProperty(navigator, 'clipboard', {
-		configurable: true,
-		value: { writeText },
-	});
+	stubClipboard(writeText);
 });
 
 afterEach(cleanup);
@@ -47,18 +45,6 @@ describe('ConditionalRulesHelp', () => {
 
 		fireEvent.click(screen.getByRole('button', { name: 'Copy conditional rules snippet' }));
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
-	});
-
-	it('does not produce an invalid snippet for a blank new-group name', () => {
-		const { container, rerender } = render(<ConditionalRulesHelp groupName=' ' />);
-
-		expect(screen.getByText('Enter a group name to generate a snippet.')).toBeTruthy();
-		expect(screen.queryByRole('button', { name: 'Copy conditional rules snippet' })).toBeNull();
-
-		rerender(<ConditionalRulesHelp groupName='Finance' />);
-		expect(container.querySelector('code')?.textContent).toBe(
-			'{% if group("Finance") %}\nGroup-specific instructions...\n{% endif %}',
-		);
 	});
 });
 

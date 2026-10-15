@@ -3,20 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { isMac, matchesShortcut } from '@/lib/platform';
 
 describe('matchesShortcut', () => {
-	it('matches mod+/ without shift', () => {
-		expect(matchesShortcut(createModEvent('/'), { mod: true, key: '/' })).toBe(true);
-	});
-
-	it('matches mod+/ with shift', () => {
-		expect(matchesShortcut(createModEvent('/', true), { mod: true, key: '/' })).toBe(true);
-	});
-
-	it('matches mod+: without shift', () => {
-		expect(matchesShortcut(createModEvent(':'), { mod: true, key: ':' })).toBe(true);
-	});
-
-	it('matches mod+: with shift', () => {
-		expect(matchesShortcut(createModEvent(':', true), { mod: true, key: ':' })).toBe(true);
+	it.each([
+		['/', 'without', false],
+		['/', 'with', true],
+		[':', 'without', false],
+		[':', 'with', true],
+	])('matches mod+%s %s shift', (key, _label, shiftKey) => {
+		expect(matchesShortcut(createModEvent(key, shiftKey), { mod: true, key })).toBe(true);
 	});
 
 	it('rejects shift for mod+k', () => {

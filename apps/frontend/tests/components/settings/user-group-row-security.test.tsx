@@ -44,17 +44,10 @@ vi.mock('@/components/settings/upgrade-to-enterprise', () => ({
 	UpgradeToEnterprise: () => <span>Upgrade to Enterprise</span>,
 }));
 
+const ordersTable = { databaseType: 'duckdb', database: 'analytics', schema: 'main', table: 'orders' };
 const registry = {
 	version: 1 as const,
-	tables: [
-		{
-			databaseType: 'duckdb',
-			database: 'analytics',
-			schema: 'main',
-			table: 'orders',
-			constraintColumns: ['tenant_id', 'region'],
-		},
-	],
+	tables: [{ ...ordersTable, constraintColumns: ['tenant_id', 'region'] }],
 };
 
 function StatefulEditor({
@@ -102,15 +95,7 @@ describe('UserGroupRowSecurity', () => {
 				databaseAccess={{
 					mode: 'restricted',
 					strict: true,
-					grants: [
-						{
-							kind: 'table',
-							databaseType: 'duckdb',
-							database: 'analytics',
-							schema: 'main',
-							table: 'orders',
-						},
-					],
+					grants: [{ kind: 'table', ...ordersTable }],
 					patterns: [],
 				}}
 			/>,
@@ -134,10 +119,7 @@ describe('UserGroupRowSecurity', () => {
 
 	it('validates active drafts against configured columns', () => {
 		const policy = {
-			databaseType: 'duckdb',
-			database: 'analytics',
-			schema: 'main',
-			table: 'orders',
+			...ordersTable,
 			access: 'predicate' as const,
 			mode: 'guided' as const,
 			combinator: 'and' as const,
@@ -156,10 +138,7 @@ describe('UserGroupRowSecurity', () => {
 				version: 1,
 				policies: [
 					{
-						databaseType: policy.databaseType,
-						database: policy.database,
-						schema: policy.schema,
-						table: policy.table,
+						...ordersTable,
 						access: 'predicate',
 						mode: 'sql',
 						predicate: 'tenant_id = 7',
@@ -212,10 +191,7 @@ describe('UserGroupRowSecurity', () => {
 			version: 1 as const,
 			policies: [
 				{
-					databaseType: 'duckdb',
-					database: 'analytics',
-					schema: 'main',
-					table: 'orders',
+					...ordersTable,
 					access: 'predicate' as const,
 					mode: 'guided' as const,
 					combinator: 'or' as const,
@@ -235,10 +211,7 @@ describe('UserGroupRowSecurity', () => {
 			version: 1 as const,
 			policies: [
 				{
-					databaseType: 'duckdb',
-					database: 'analytics',
-					schema: 'main',
-					table: 'orders',
+					...ordersTable,
 					access: 'predicate' as const,
 					mode: 'sql' as const,
 					predicate: "WHERE tenant_id = 7 OR region = 'west'",
@@ -254,9 +227,7 @@ describe('UserGroupRowSecurity', () => {
 
 	it('reveals and retains the combinator when conditions are added and removed', () => {
 		render(<StatefulEditor />);
-		fireEvent.change(screen.getByRole('combobox', { name: 'Row access for orders' }), {
-			target: { value: 'predicate' },
-		});
+		selectFilteredRows();
 		fireEvent.change(screen.getByRole('combobox', { name: 'Column for orders condition 1' }), {
 			target: { value: 'region' },
 		});
@@ -309,9 +280,7 @@ describe('UserGroupRowSecurity', () => {
 
 	it('shows Guided field errors only after validation is enabled', () => {
 		const { rerender } = render(<StatefulEditor />);
-		fireEvent.change(screen.getByRole('combobox', { name: 'Row access for orders' }), {
-			target: { value: 'predicate' },
-		});
+		selectFilteredRows();
 
 		const value = screen.getByRole('textbox', { name: 'Value for orders condition 1' });
 		expect(screen.queryByText('Enter a value.')).toBeNull();
@@ -328,9 +297,7 @@ describe('UserGroupRowSecurity', () => {
 
 	it('switches between Guided and SQL policies and edits a manual predicate', () => {
 		render(<StatefulEditor />);
-		fireEvent.change(screen.getByRole('combobox', { name: 'Row access for orders' }), {
-			target: { value: 'predicate' },
-		});
+		selectFilteredRows();
 		fireEvent.change(screen.getByRole('textbox', { name: 'Value for orders condition 1' }), {
 			target: { value: '7' },
 		});
@@ -373,9 +340,7 @@ describe('UserGroupRowSecurity', () => {
 
 	it('keeps SQL empty when switching from an incomplete Guided policy', () => {
 		render(<StatefulEditor />);
-		fireEvent.change(screen.getByRole('combobox', { name: 'Row access for orders' }), {
-			target: { value: 'predicate' },
-		});
+		selectFilteredRows();
 		fireEvent.click(screen.getByRole('button', { name: 'SQL' }));
 
 		const sql = screen.getByRole('textbox', { name: 'SQL predicate for orders' }) as HTMLTextAreaElement;
@@ -398,10 +363,7 @@ describe('UserGroupRowSecurity', () => {
 					version: 1,
 					policies: [
 						{
-							databaseType: 'duckdb',
-							database: 'analytics',
-							schema: 'main',
-							table: 'orders',
+							...ordersTable,
 							access: 'predicate',
 							mode: 'sql',
 							predicate: '',
@@ -427,9 +389,7 @@ describe('UserGroupRowSecurity', () => {
 
 	it('hides values for null operators and reports invalid lists', () => {
 		render(<StatefulEditor showValidationErrors />);
-		fireEvent.change(screen.getByRole('combobox', { name: 'Row access for orders' }), {
-			target: { value: 'predicate' },
-		});
+		selectFilteredRows();
 		const operator = screen.getByRole('combobox', { name: 'Operator for orders condition 1' });
 		fireEvent.change(operator, { target: { value: 'is-null' } });
 
@@ -467,10 +427,7 @@ describe('UserGroupRowSecurity', () => {
 					version: 1,
 					policies: [
 						{
-							databaseType: 'duckdb',
-							database: 'analytics',
-							schema: 'main',
-							table: 'orders',
+							...ordersTable,
 							access: 'predicate',
 							mode: 'guided',
 							combinator: 'and',
@@ -510,10 +467,7 @@ describe('UserGroupRowSecurity', () => {
 					version: 1,
 					policies: [
 						{
-							databaseType: 'duckdb',
-							database: 'analytics',
-							schema: 'main',
-							table: 'orders',
+							...ordersTable,
 							access: 'predicate',
 							mode: 'sql',
 							predicate: 'WHERE tenant_id = 7',
@@ -530,6 +484,12 @@ describe('UserGroupRowSecurity', () => {
 		expect((screen.getByRole('button', { name: 'SQL' }) as HTMLButtonElement).disabled).toBe(true);
 	});
 });
+
+function selectFilteredRows() {
+	fireEvent.change(screen.getByRole('combobox', { name: 'Row access for orders' }), {
+		target: { value: 'predicate' },
+	});
+}
 
 function readPolicyState(): UserGroupRowPolicies {
 	return JSON.parse(screen.getByLabelText('Policy state').textContent ?? '');

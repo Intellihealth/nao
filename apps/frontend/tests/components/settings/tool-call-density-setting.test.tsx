@@ -3,17 +3,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { stubResizeObserver } from '../../helpers/browser-stubs';
 import { ToolCallDensitySetting } from '@/components/settings/tool-call-density-setting';
 
-class ResizeObserverMock {
-	observe() {}
-	unobserve() {}
-	disconnect() {}
-}
-
-beforeAll(() => {
-	vi.stubGlobal('ResizeObserver', ResizeObserverMock);
-});
+beforeAll(stubResizeObserver);
 
 afterAll(() => {
 	vi.unstubAllGlobals();

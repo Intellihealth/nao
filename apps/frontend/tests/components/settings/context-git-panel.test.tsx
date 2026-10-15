@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { openDropdownMenu } from '../../helpers/dropdown-menu';
+import { createTestQueryClient } from '../../helpers/query-client';
 import { ContextGitPanel } from '@/components/settings/context-git-panel';
 
 const mocks = vi.hoisted(() => ({
@@ -97,9 +99,7 @@ describe('ContextGitPanel update action', () => {
 	});
 
 	it('opens directly in the blocked state when changed files are known', async () => {
-		mocks.getChangedFiles.mockResolvedValue([
-			{ path: '/context.md', kind: 'modified', additions: 1, deletions: 0 },
-		]);
+		mockUncommittedChange();
 		renderPanel();
 
 		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
@@ -120,16 +120,11 @@ describe('ContextGitPanel update action', () => {
 	});
 
 	it('opens the branch selector to explain why switching is blocked', async () => {
-		mocks.getChangedFiles.mockResolvedValue([
-			{ path: '/context.md', kind: 'modified', additions: 1, deletions: 0 },
-		]);
+		mockUncommittedChange();
 		renderPanel();
 
 		await screen.findByRole('button', { name: 'Commit' });
-		fireEvent.pointerDown(screen.getByRole('button', { name: 'Current repository branch' }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openDropdownMenu('Current repository branch');
 
 		const branch = await screen.findByRole('menuitemcheckbox', { name: /main/ });
 		expect(branch.hasAttribute('data-disabled')).toBe(true);
@@ -140,8 +135,7 @@ describe('ContextGitPanel update action', () => {
 		mocks.updateWorktree.mockRejectedValue(new Error('Commit or discard changes before switching branches.'));
 		renderPanel();
 
-		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
-		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
+		await confirmFileExplorerUpdate();
 
 		expect(
 			await screen.findByText('File Explorer has uncommitted changes. Commit or discard them before updating.'),
@@ -157,8 +151,7 @@ describe('ContextGitPanel update action', () => {
 		mocks.updateWorktree.mockRejectedValue(new Error('Unable to reach the repository.'));
 		renderPanel();
 
-		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
-		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
+		await confirmFileExplorerUpdate();
 
 		expect(await screen.findByText('Unable to reach the repository.')).toBeTruthy();
 		expect(
@@ -171,8 +164,7 @@ describe('ContextGitPanel update action', () => {
 		const onRepositoryChanged = vi.fn();
 		renderPanel({ onRepositoryChanged });
 
-		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
-		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
+		await confirmFileExplorerUpdate();
 
 		await waitFor(() => {
 			expect(mocks.updateWorktree.mock.calls[0]?.[0]).toEqual({ requiredCommits: [] });
@@ -186,7 +178,7 @@ describe('ContextGitPanel update action', () => {
 
 		await screen.findByText('Nothing to commit');
 		const branchTrigger = screen.getByRole('button', { name: 'Current repository branch' });
-		fireEvent.pointerDown(branchTrigger, { button: 0, ctrlKey: false });
+		openDropdownMenu(branchTrigger);
 		expect(await screen.findByRole('menuitemcheckbox', { name: /main/ })).toBeTruthy();
 
 		fireEvent.keyDown(document, { key: 'Escape' });
@@ -208,30 +200,18 @@ describe('ContextGitPanel update action', () => {
 		expect(document.body.style.pointerEvents).not.toBe('none');
 		expect(branchTrigger.hasAttribute('disabled')).toBe(false);
 		expect(screen.getByRole('button', { name: 'Git' }).parentElement?.className).toContain('w-auto');
-		fireEvent.pointerDown(branchTrigger, { button: 0, ctrlKey: false });
+		openDropdownMenu(branchTrigger);
 
 		expect(await screen.findByRole('menuitemcheckbox', { name: /main/ })).toBeTruthy();
 	});
 });
 
-function renderPanel({
-	hasUnsavedFileChanges = false,
-	onRepositoryChanged = vi.fn(),
-}: {
-	hasUnsavedFileChanges?: boolean;
-	onRepositoryChanged?: () => void;
-} = {}) {
-	const queryClient = new QueryClient({
-		defaultOptions: {
-			queries: { retry: false },
-			mutations: { retry: false },
-		},
-	});
+function renderPanel({ onRepositoryChanged = vi.fn() }: { onRepositoryChanged?: () => void } = {}) {
 	return render(
-		<QueryClientProvider client={queryClient}>
+		<QueryClientProvider client={createTestQueryClient()}>
 			<ContextGitPanel
 				selectedDiffPath={null}
-				hasUnsavedFileChanges={hasUnsavedFileChanges}
+				hasUnsavedFileChanges={false}
 				onViewDiff={vi.fn()}
 				onCommitted={vi.fn()}
 				onDiscarded={vi.fn()}
@@ -240,6 +220,15 @@ function renderPanel({
 			/>
 		</QueryClientProvider>,
 	);
+}
+
+async function confirmFileExplorerUpdate() {
+	fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
+	fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
+}
+
+function mockUncommittedChange() {
+	mocks.getChangedFiles.mockResolvedValue([{ path: '/context.md', kind: 'modified', additions: 1, deletions: 0 }]);
 }
 
 function createRepositoryStatus(updateNeeded: boolean) {

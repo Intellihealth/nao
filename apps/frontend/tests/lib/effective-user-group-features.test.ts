@@ -14,37 +14,29 @@ const effectiveAccess = {
 	},
 };
 
+const loadingSafeAccess = {
+	features: {
+		storyCreation: false,
+		customStoryCreation: false,
+		automationCreation: false,
+	},
+	toolCallDensityPolicy: {
+		defaultDensity: 'detailed',
+		canChange: false,
+	},
+};
+
 describe('getRenderableUserGroupAccess', () => {
 	it('returns effective access only when it is available', () => {
 		expect(getRenderableUserGroupAccess(effectiveAccess, true)).toEqual(effectiveAccess);
 	});
 
 	it('denies features and locks density while loading or after an error', () => {
-		expect(getRenderableUserGroupAccess(effectiveAccess, false)).toEqual({
-			features: {
-				storyCreation: false,
-				customStoryCreation: false,
-				automationCreation: false,
-			},
-			toolCallDensityPolicy: {
-				defaultDensity: 'detailed',
-				canChange: false,
-			},
-		});
+		expect(getRenderableUserGroupAccess(effectiveAccess, false)).toEqual(loadingSafeAccess);
 	});
 
 	it('uses loading-safe access when no project result exists', () => {
-		expect(getRenderableUserGroupAccess(undefined, true)).toEqual({
-			features: {
-				storyCreation: false,
-				customStoryCreation: false,
-				automationCreation: false,
-			},
-			toolCallDensityPolicy: {
-				defaultDensity: 'detailed',
-				canChange: false,
-			},
-		});
+		expect(getRenderableUserGroupAccess(undefined, true)).toEqual(loadingSafeAccess);
 	});
 });
 

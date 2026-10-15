@@ -3,6 +3,7 @@
 import { TRPCClientError } from '@trpc/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubLocalStorage } from '../helpers/browser-stubs';
 import type { TrpcRouter } from '@nao/backend/trpc';
 import {
 	clearStaleActiveOrganization,
@@ -12,14 +13,7 @@ import {
 import { getActiveProjectId, setActiveProjectId } from '@/lib/active-project';
 
 describe('active organization storage', () => {
-	beforeEach(() => {
-		const values = new Map<string, string>();
-		vi.stubGlobal('localStorage', {
-			clear: () => values.clear(),
-			getItem: (key: string) => values.get(key) ?? null,
-			setItem: (key: string, value: string) => values.set(key, value),
-		});
-	});
+	beforeEach(stubLocalStorage);
 
 	afterEach(() => vi.unstubAllGlobals());
 
@@ -42,9 +36,7 @@ describe('active organization storage', () => {
 
 	it('leaves storage unchanged when the request has no selection', () => {
 		setActiveProjectId('project-id');
-		const error = TRPCClientError.from<TrpcRouter>({
-			error: { code: -32004, message: 'error', data: { code: 'NOT_FOUND', httpStatus: 404 } },
-		});
+		const error = createTrpcError('NOT_FOUND', -32004, 404);
 
 		expect(clearStaleActiveOrganization(null, null, error)).toBe(false);
 		expect(getActiveOrganizationId()).toBeNull();
@@ -60,9 +52,7 @@ describe('active organization storage', () => {
 		(activeOrganization, requestedProject, expectedProject, expectedCleared) => {
 			setActiveOrganizationId(activeOrganization);
 			setActiveProjectId('project-id');
-			const error = TRPCClientError.from<TrpcRouter>({
-				error: { code: -32004, message: 'error', data: { code: 'NOT_FOUND', httpStatus: 404 } },
-			});
+			const error = createTrpcError('NOT_FOUND', -32004, 404);
 
 			expect(clearStaleActiveOrganization(null, requestedProject, error)).toBe(expectedCleared);
 			expect(getActiveOrganizationId()).toBe(activeOrganization);
@@ -79,9 +69,7 @@ describe('active organization storage', () => {
 		(code, rpcCode, httpStatus, requestedOrganization, expectedOrganization, expectedProject, expectedCleared) => {
 			setActiveOrganizationId('organization-id');
 			setActiveProjectId('project-id');
-			const error = TRPCClientError.from<TrpcRouter>({
-				error: { code: rpcCode, message: 'error', data: { code, httpStatus } },
-			});
+			const error = createTrpcError(code, rpcCode, httpStatus);
 
 			expect(error.data?.code).toBe(code);
 			expect(clearStaleActiveOrganization(requestedOrganization, null, error)).toBe(expectedCleared);
@@ -90,3 +78,7 @@ describe('active organization storage', () => {
 		},
 	);
 });
+
+function createTrpcError(code: string, rpcCode: number, httpStatus: number) {
+	return TRPCClientError.from<TrpcRouter>({ error: { code: rpcCode, message: 'error', data: { code, httpStatus } } });
+}

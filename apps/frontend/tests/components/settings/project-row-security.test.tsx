@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubResizeObserver } from '../../helpers/browser-stubs';
 import { ProjectRowSecurity } from '@/components/settings/project-row-security';
 
 const mocks = vi.hoisted(() => ({
@@ -80,21 +81,13 @@ vi.mock('@/components/settings/upgrade-to-enterprise', () => ({
 	UpgradeToEnterprise: () => <span>Upgrade to Enterprise</span>,
 }));
 
+const ordersTable = { databaseType: 'duckdb', database: 'analytics', schema: 'main', table: 'orders' };
+const customersTable = { databaseType: 'duckdb', database: 'analytics', schema: 'sales', table: 'customers' };
+const legacyOrdersTable = { databaseType: 'duckdb', database: 'archive', schema: 'main', table: 'legacy_orders' };
+
 const objects = [
-	{
-		databaseType: 'duckdb',
-		database: 'analytics',
-		schema: 'main',
-		table: 'orders',
-		columns: ['id', 'tenant_id'],
-	},
-	{
-		databaseType: 'duckdb',
-		database: 'analytics',
-		schema: 'sales',
-		table: 'customers',
-		columns: ['id', 'region'],
-	},
+	{ ...ordersTable, columns: ['id', 'tenant_id'] },
+	{ ...customersTable, columns: ['id', 'region'] },
 ];
 
 describe('ProjectRowSecurity', () => {
@@ -109,13 +102,7 @@ describe('ProjectRowSecurity', () => {
 		mocks.mutationOptions.mockReset().mockImplementation((options) => options);
 		mocks.invalidateQueries.mockReset().mockResolvedValue(undefined);
 		mocks.refetch.mockReset();
-		vi.stubGlobal(
-			'ResizeObserver',
-			vi.fn(() => ({
-				observe: vi.fn(),
-				disconnect: vi.fn(),
-			})),
-		);
+		stubResizeObserver();
 	});
 
 	afterEach(() => {
@@ -229,9 +216,7 @@ describe('ProjectRowSecurity', () => {
 		render(<ProjectRowSecurity objects={objects} />);
 		openConfiguration();
 
-		fireEvent.change(screen.getByRole('textbox', { name: 'Search row-level security tables' }), {
-			target: { value: 'a' },
-		});
+		searchTables('a');
 
 		const database = screen.getByRole('button', { name: 'Expand analytics database' });
 		expect(database.getAttribute('aria-expanded')).toBe('false');
@@ -262,9 +247,8 @@ describe('ProjectRowSecurity', () => {
 			/>,
 		);
 		openConfiguration();
-		const search = screen.getByRole('textbox', { name: 'Search row-level security tables' });
 
-		fireEvent.change(search, { target: { value: 'CuStOm' } });
+		searchTables('CuStOm');
 
 		expect(screen.getByRole('button', { name: 'Collapse jaffle_shop database' })).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Collapse main schema' })).toBeTruthy();
@@ -284,9 +268,7 @@ describe('ProjectRowSecurity', () => {
 		render(<ProjectRowSecurity objects={objects} />);
 		openConfiguration();
 
-		fireEvent.change(screen.getByRole('textbox', { name: 'Search row-level security tables' }), {
-			target: { value: 'main' },
-		});
+		searchTables('main');
 
 		expect(screen.getByRole('button', { name: 'Collapse analytics database' })).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Expand main schema' }).getAttribute('aria-expanded')).toBe('false');
@@ -310,9 +292,7 @@ describe('ProjectRowSecurity', () => {
 		);
 		openConfiguration();
 
-		fireEvent.change(screen.getByRole('textbox', { name: 'Search row-level security tables' }), {
-			target: { value: 'REGION' },
-		});
+		searchTables('REGION');
 
 		expect(screen.getByRole('button', { name: 'Collapse analytics database' })).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Collapse sales schema' })).toBeTruthy();
@@ -328,21 +308,20 @@ describe('ProjectRowSecurity', () => {
 		render(<ProjectRowSecurity objects={objects} />);
 		openConfiguration();
 		fireEvent.click(screen.getByRole('button', { name: 'Expand analytics database' }));
-		const search = screen.getByRole('textbox', { name: 'Search row-level security tables' });
 
-		fireEvent.change(search, { target: { value: 'region' } });
+		searchTables('region');
 		expect(screen.getByRole('checkbox', { name: 'region constraint column for customers' })).toBeTruthy();
 
-		fireEvent.change(search, { target: { value: 'a' } });
+		searchTables('a');
 		expect(screen.getByRole('button', { name: 'Collapse analytics database' }).getAttribute('aria-expanded')).toBe(
 			'true',
 		);
 		expect(screen.getByRole('button', { name: 'Expand sales schema' }).getAttribute('aria-expanded')).toBe('false');
 		expect(screen.queryByText('customers')).toBeNull();
 
-		fireEvent.change(search, { target: { value: 'missing' } });
+		searchTables('missing');
 		expect(screen.getByText('No matching tables or columns.')).toBeTruthy();
-		fireEvent.change(search, { target: { value: '' } });
+		searchTables('');
 		expect(screen.getByRole('button', { name: 'Collapse analytics database' })).toBeTruthy();
 	});
 
@@ -372,32 +351,10 @@ describe('ProjectRowSecurity', () => {
 		fireEvent.click(screen.getByRole('checkbox', { name: 'region constraint column for customers' }));
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-		expect(mocks.mutate).toHaveBeenCalledWith(
-			{
-				version: 1,
-				tables: [
-					{
-						databaseType: 'duckdb',
-						database: 'analytics',
-						schema: 'main',
-						table: 'orders',
-						constraintColumns: ['tenant_id'],
-					},
-					{
-						databaseType: 'duckdb',
-						database: 'analytics',
-						schema: 'sales',
-						table: 'customers',
-						constraintColumns: ['region'],
-					},
-				],
-			},
-			expect.objectContaining({ onSuccess: expect.any(Function) }),
-		);
-		await waitFor(() => {
-			expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['row-security'] });
-			expect(screen.queryByRole('dialog')).toBeNull();
-		});
+		await expectRegistrySaved([
+			protectedTable(ordersTable, ['tenant_id']),
+			protectedTable(customersTable, ['region']),
+		]);
 	});
 
 	it('opens Edit with only the selected table and its columns', () => {
@@ -429,32 +386,10 @@ describe('ProjectRowSecurity', () => {
 		fireEvent.click(screen.getByRole('checkbox', { name: 'id constraint column for orders' }));
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-		expect(mocks.mutate).toHaveBeenCalledWith(
-			{
-				version: 1,
-				tables: [
-					{
-						databaseType: 'duckdb',
-						database: 'analytics',
-						schema: 'main',
-						table: 'orders',
-						constraintColumns: ['id', 'tenant_id'],
-					},
-					{
-						databaseType: 'duckdb',
-						database: 'analytics',
-						schema: 'sales',
-						table: 'customers',
-						constraintColumns: ['region'],
-					},
-				],
-			},
-			expect.objectContaining({ onSuccess: expect.any(Function) }),
+		await expectRegistrySaved(
+			[protectedTable(ordersTable, ['id', 'tenant_id']), protectedTable(customersTable, ['region'])],
+			'Edit protected table',
 		);
-		await waitFor(() => {
-			expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['row-security'] });
-			expect(screen.queryByRole('dialog', { name: 'Edit protected table' })).toBeNull();
-		});
 	});
 
 	it('discards Edit changes on cancel', () => {
@@ -508,14 +443,7 @@ describe('ProjectRowSecurity', () => {
 		fireEvent.click(removeButton);
 		fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 
-		expect(mocks.mutate).toHaveBeenCalledWith(
-			{ version: 1, tables: [] },
-			expect.objectContaining({ onSuccess: expect.any(Function) }),
-		);
-		await waitFor(() => {
-			expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['row-security'] });
-			expect(screen.queryByRole('dialog', { name: 'Remove protected table?' })).toBeNull();
-		});
+		await expectRegistrySaved([], 'Remove protected table?');
 	});
 
 	it('shows removal errors and prevents closing while pending', () => {
@@ -552,25 +480,10 @@ describe('ProjectRowSecurity', () => {
 	});
 
 	it('lets Edit remove unavailable saved columns', async () => {
-		mocks.rowSecurity = {
-			version: 1,
-			tables: [
-				{
-					databaseType: 'duckdb',
-					database: 'analytics',
-					schema: 'main',
-					table: 'orders',
-					constraintColumns: ['missing_column', 'tenant_id'],
-				},
-				{
-					databaseType: 'duckdb',
-					database: 'archive',
-					schema: 'main',
-					table: 'legacy_orders',
-					constraintColumns: ['tenant_id'],
-				},
-			],
-		};
+		mocks.rowSecurity = registry(
+			protectedTable(ordersTable, ['missing_column', 'tenant_id']),
+			protectedTable(legacyOrdersTable, ['tenant_id']),
+		);
 		render(<ProjectRowSecurity objects={objects} />);
 
 		expect(screen.getByText(/missing_column/).textContent).toContain('unavailable');
@@ -587,47 +500,14 @@ describe('ProjectRowSecurity', () => {
 		fireEvent.click(missingColumn);
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-		expect(mocks.mutate).toHaveBeenCalledWith(
-			{
-				version: 1,
-				tables: [
-					{
-						databaseType: 'duckdb',
-						database: 'analytics',
-						schema: 'main',
-						table: 'orders',
-						constraintColumns: ['tenant_id'],
-					},
-					{
-						databaseType: 'duckdb',
-						database: 'archive',
-						schema: 'main',
-						table: 'legacy_orders',
-						constraintColumns: ['tenant_id'],
-					},
-				],
-			},
-			expect.objectContaining({ onSuccess: expect.any(Function) }),
+		await expectRegistrySaved(
+			[protectedTable(ordersTable, ['tenant_id']), protectedTable(legacyOrdersTable, ['tenant_id'])],
+			'Edit protected table',
 		);
-		await waitFor(() => {
-			expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['row-security'] });
-			expect(screen.queryByRole('dialog', { name: 'Edit protected table' })).toBeNull();
-		});
 	});
 
 	it('shows a clear unavailable state when editing a missing table', () => {
-		mocks.rowSecurity = {
-			version: 1,
-			tables: [
-				{
-					databaseType: 'duckdb',
-					database: 'archive',
-					schema: 'main',
-					table: 'legacy_orders',
-					constraintColumns: ['tenant_id'],
-				},
-			],
-		};
+		mocks.rowSecurity = registry(protectedTable(legacyOrdersTable, ['tenant_id']));
 		render(<ProjectRowSecurity objects={objects} />);
 
 		fireEvent.click(screen.getByRole('button', { name: 'Edit legacy_orders' }));
@@ -699,38 +579,40 @@ describe('ProjectRowSecurity', () => {
 });
 
 function configuredRegistry() {
-	return {
-		version: 1 as const,
-		tables: [
-			{
-				databaseType: 'duckdb',
-				database: 'analytics',
-				schema: 'main',
-				table: 'orders',
-				constraintColumns: ['tenant_id'],
-			},
-		],
-	};
+	return registry(protectedTable(ordersTable, ['tenant_id']));
 }
 
 function configuredRegistryWithTwoTables() {
-	return {
-		version: 1 as const,
-		tables: [
-			...configuredRegistry().tables,
-			{
-				databaseType: 'duckdb',
-				database: 'analytics',
-				schema: 'sales',
-				table: 'customers',
-				constraintColumns: ['region'],
-			},
-		],
-	};
+	return registry(protectedTable(ordersTable, ['tenant_id']), protectedTable(customersTable, ['region']));
+}
+
+function registry(...tables: ReturnType<typeof protectedTable>[]) {
+	return { version: 1 as const, tables };
+}
+
+function protectedTable(identity: typeof ordersTable, constraintColumns: string[]) {
+	return { ...identity, constraintColumns };
+}
+
+async function expectRegistrySaved(tables: ReturnType<typeof protectedTable>[], closedDialogName?: string) {
+	expect(mocks.mutate).toHaveBeenCalledWith(
+		{ version: 1, tables },
+		expect.objectContaining({ onSuccess: expect.any(Function) }),
+	);
+	await waitFor(() => {
+		expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['row-security'] });
+		expect(screen.queryByRole('dialog', closedDialogName ? { name: closedDialogName } : undefined)).toBeNull();
+	});
 }
 
 function openConfiguration() {
 	fireEvent.click(screen.getAllByRole('button', { name: 'Add protected table' })[0]);
+}
+
+function searchTables(value: string) {
+	fireEvent.change(screen.getByRole('textbox', { name: 'Search row-level security tables' }), {
+		target: { value },
+	});
 }
 
 function expandToOrders() {

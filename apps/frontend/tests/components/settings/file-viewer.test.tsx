@@ -3,6 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubLocalStorage, stubResizeObserver } from '../../helpers/browser-stubs';
+import { openDropdownMenu } from '../../helpers/dropdown-menu';
 import type { ReactNode } from 'react';
 import { FileViewer, isRootRulesPath } from '@/components/settings/file-viewer';
 
@@ -61,14 +63,8 @@ const groups = {
 };
 
 beforeEach(() => {
-	vi.stubGlobal('localStorage', createMemoryStorage());
-	vi.stubGlobal(
-		'ResizeObserver',
-		vi.fn(() => ({
-			observe: vi.fn(),
-			disconnect: vi.fn(),
-		})),
-	);
+	stubLocalStorage();
+	stubResizeObserver();
 });
 
 afterEach(() => {
@@ -112,7 +108,7 @@ describe('FileViewer RULES preview', () => {
 		expect(screen.getByTestId('markdown-preview').textContent).toBe('Public\n');
 		const initialTokens = screen.getByText(/tokens$/).textContent;
 
-		openGroupPicker();
+		openDropdownMenu(/Select user groups/);
 		expect(
 			screen.getByRole('menuitemcheckbox', { name: 'All Users (automatic)' }).getAttribute('aria-disabled'),
 		).toBe('true');
@@ -211,25 +207,4 @@ function renderViewer({
 			rulesPreviewGroups={rulesPreviewGroups}
 		/>,
 	);
-}
-
-function openGroupPicker() {
-	fireEvent.pointerDown(screen.getByRole('button', { name: /Select user groups/ }), {
-		button: 0,
-		ctrlKey: false,
-	});
-}
-
-function createMemoryStorage(): Storage {
-	const values = new Map<string, string>();
-	return {
-		get length() {
-			return values.size;
-		},
-		clear: () => values.clear(),
-		getItem: (key) => values.get(key) ?? null,
-		key: (index) => [...values.keys()][index] ?? null,
-		removeItem: (key) => values.delete(key),
-		setItem: (key, value) => values.set(key, value),
-	};
 }

@@ -12,23 +12,19 @@ vi.mock('@/main', () => ({
 describe('FeedbackDialog', () => {
 	afterEach(cleanup);
 
-	it('shows positive feedback wording', () => {
-		render(<FeedbackDialog open onOpenChange={vi.fn()} onSubmit={vi.fn()} isPending={false} vote='up' />);
+	it.each([
+		['shows positive', 'up', 'What went well?', 'Tell us what worked well (optional)'],
+		['preserves negative', 'down', 'What went wrong?', 'Tell us what could be better (optional)'],
+	] as const)('%s feedback wording', (_scenario, vote, title, placeholder) => {
+		renderFeedbackDialog(vote);
 
-		expect(screen.getByText('What went well?')).toBeDefined();
-		expect(screen.getByPlaceholderText('Tell us what worked well (optional)')).toBeDefined();
-	});
-
-	it('preserves negative feedback wording', () => {
-		render(<FeedbackDialog open onOpenChange={vi.fn()} onSubmit={vi.fn()} isPending={false} vote='down' />);
-
-		expect(screen.getByText('What went wrong?')).toBeDefined();
-		expect(screen.getByPlaceholderText('Tell us what could be better (optional)')).toBeDefined();
+		expect(screen.getByText(title)).toBeDefined();
+		expect(screen.getByPlaceholderText(placeholder)).toBeDefined();
 	});
 
 	it('submits trimmed text or undefined when empty', () => {
 		const onSubmit = vi.fn();
-		render(<FeedbackDialog open onOpenChange={vi.fn()} onSubmit={onSubmit} isPending={false} vote='up' />);
+		renderFeedbackDialog('up', onSubmit);
 
 		fireEvent.change(screen.getByPlaceholderText('Tell us what worked well (optional)'), {
 			target: { value: '  Clear and useful  ' },
@@ -40,3 +36,7 @@ describe('FeedbackDialog', () => {
 		expect(onSubmit).toHaveBeenNthCalledWith(2, undefined);
 	});
 });
+
+function renderFeedbackDialog(vote: 'up' | 'down', onSubmit = vi.fn()) {
+	render(<FeedbackDialog open onOpenChange={vi.fn()} onSubmit={onSubmit} isPending={false} vote={vote} />);
+}

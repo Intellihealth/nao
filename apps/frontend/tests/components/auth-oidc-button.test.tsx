@@ -31,19 +31,13 @@ describe('OidcSignInButton', () => {
 		expect(screen.getByRole('button', { name: /continue with okta/i })).toBeDefined();
 	});
 
-	it('shows Okta icon for okta provider', () => {
-		render(<OidcSignInButton providerId='okta' providerName='Okta' />);
-		expect(screen.getByTestId('okta-icon')).toBeDefined();
-	});
-
-	it('shows Auth0 icon for auth0 provider', () => {
-		render(<OidcSignInButton providerId='auth0' providerName='Auth0' />);
-		expect(screen.getByTestId('auth0-icon')).toBeDefined();
-	});
-
-	it('shows Keycloak icon for keycloak provider', () => {
-		render(<OidcSignInButton providerId='keycloak' providerName='Keycloak' />);
-		expect(screen.getByTestId('keycloak-icon')).toBeDefined();
+	it.each([
+		['Okta', 'okta'],
+		['Auth0', 'auth0'],
+		['Keycloak', 'keycloak'],
+	])('shows %s icon for %s provider', (providerName, providerId) => {
+		render(<OidcSignInButton providerId={providerId} providerName={providerName} />);
+		expect(screen.getByTestId(`${providerId}-icon`)).toBeDefined();
 	});
 
 	it('is case-insensitive for provider ID matching', () => {

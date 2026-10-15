@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createTestQueryClient } from '../helpers/query-client';
 import type { ReactNode } from 'react';
 import { useOrganizationBilling } from '@/hooks/use-organization-billing';
 
@@ -121,6 +122,5 @@ describe('useOrganizationBilling', () => {
 });
 
 function wrapper({ children }: { children: ReactNode }) {
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	return <QueryClientProvider client={createTestQueryClient()}>{children}</QueryClientProvider>;
 }

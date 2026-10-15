@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubClipboard } from '../../helpers/browser-stubs';
 import { ProjectIdentifier } from '@/components/settings/project-identifier';
 
 const writeText = vi.fn();
@@ -10,10 +11,7 @@ const projectId = '123e4567-e89b-12d3-a456-426614174000';
 
 beforeEach(() => {
 	writeText.mockReset();
-	Object.defineProperty(navigator, 'clipboard', {
-		configurable: true,
-		value: { writeText },
-	});
+	stubClipboard(writeText);
 });
 
 afterEach(cleanup);

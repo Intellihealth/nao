@@ -3,8 +3,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { FileTreeCatalogEntry, FileTreeLabels } from '@/components/settings/user-group-file-tree-access';
 import type { FileTreeAccess } from '@nao/shared';
+import type { ComponentProps } from 'react';
 import {
 	DOCS_TREE_LABELS,
 	FileTreeAccessRoot,
@@ -117,21 +117,7 @@ describe('user group docs tree', () => {
 		const { rerender } = renderTree({ entries: [], syncState: 'missing', search: 'finance', searching: true });
 		expect(screen.getByText('Missing')).toBeTruthy();
 
-		rerender(
-			<FileTreeAccessRoot
-				labels={DOCS_TREE_LABELS}
-				entries={[]}
-				access={{ mode: 'restricted', grants: [] }}
-				search=''
-				searching={false}
-				syncState={undefined}
-				isLoading={false}
-				isError
-				disabled={false}
-				onRetry={vi.fn()}
-				onChange={vi.fn()}
-			/>,
-		);
+		rerender(createTree({ entries: [], syncState: undefined, isError: true }));
 		expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
 	});
 
@@ -218,44 +204,25 @@ describe('user group project files tree', () => {
 	});
 });
 
-function renderTree({
-	labels = DOCS_TREE_LABELS,
-	entries: treeEntries = entries,
-	access = { mode: 'restricted', grants: [] },
-	search = '',
-	searching = false,
-	syncState = 'ready',
-	isLoading = false,
-	isError = false,
-	disabled = false,
-	onRetry = vi.fn(),
-	onChange = vi.fn(),
-}: {
-	labels?: FileTreeLabels;
-	entries?: FileTreeCatalogEntry[];
-	access?: FileTreeAccess;
-	search?: string;
-	searching?: boolean;
-	syncState?: 'missing' | 'ready';
-	isLoading?: boolean;
-	isError?: boolean;
-	disabled?: boolean;
-	onRetry?: () => void;
-	onChange?: (access: FileTreeAccess) => void;
-} = {}) {
-	return render(
+function renderTree(overrides: Partial<ComponentProps<typeof FileTreeAccessRoot>> = {}) {
+	return render(createTree(overrides));
+}
+
+function createTree(overrides: Partial<ComponentProps<typeof FileTreeAccessRoot>>) {
+	return (
 		<FileTreeAccessRoot
-			labels={labels}
-			entries={treeEntries}
-			access={access}
-			search={search}
-			searching={searching}
-			syncState={syncState}
-			isLoading={isLoading}
-			isError={isError}
-			disabled={disabled}
-			onRetry={onRetry}
-			onChange={onChange}
-		/>,
+			labels={DOCS_TREE_LABELS}
+			entries={entries}
+			access={{ mode: 'restricted', grants: [] }}
+			search=''
+			searching={false}
+			syncState='ready'
+			isLoading={false}
+			isError={false}
+			disabled={false}
+			onRetry={vi.fn()}
+			onChange={vi.fn()}
+			{...overrides}
+		/>
 	);
 }

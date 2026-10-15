@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { deferred } from '../../helpers/deferred';
+import { createTestQueryClient } from '../../helpers/query-client';
 import { invalidateExplorerQueries } from '@/components/settings/context-git-panel';
 import { LiveContextUpdateSettings } from '@/components/settings/live-context-update-settings';
 
@@ -57,6 +59,12 @@ vi.mock('@/main', () => ({
 	},
 }));
 
+const historicalRange = { from: 'a'.repeat(40), to: 'b'.repeat(40) };
+const historicalDiffNavigation = {
+	to: '/settings/context-explorer',
+	search: { path: '/context.md', ...historicalRange },
+};
+
 describe('LiveContextUpdateSettings historical diffs', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -70,27 +78,15 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 
 	it('opens a ready historical diff without running the update mutation', async () => {
 		renderSettings();
-		const fileLink = await screen.findByRole('button', {
-			name: 'Open /context.md in File Explorer',
-		});
+		const fileLink = await findHistoricalFileLink();
 
 		fireEvent.click(fileLink);
 
 		await waitFor(() => {
-			expect(mocks.navigate).toHaveBeenCalledWith({
-				to: '/settings/context-explorer',
-				search: {
-					path: '/context.md',
-					from: 'a'.repeat(40),
-					to: 'b'.repeat(40),
-				},
-			});
+			expect(mocks.navigate).toHaveBeenCalledWith(historicalDiffNavigation);
 		});
 		expect(mocks.updateWorktree).not.toHaveBeenCalled();
-		expect(mocks.getHistoricalAction).toHaveBeenCalledWith({
-			from: 'a'.repeat(40),
-			to: 'b'.repeat(40),
-		});
+		expect(mocks.getHistoricalAction).toHaveBeenCalledWith(historicalRange);
 		expect(mocks.getHistory).toHaveBeenCalledOnce();
 	});
 
@@ -98,9 +94,7 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		const switched = deferred<{ branch: string; commit: string; fetched: boolean }>();
 		mocks.updateWorktree.mockReturnValue(switched.promise);
 		const { queryClient } = renderSettings();
-		const fileLink = await screen.findByRole('button', {
-			name: 'Open /context.md in File Explorer',
-		});
+		const fileLink = await findHistoricalFileLink();
 		mocks.fileExplorerAction = 'switch';
 
 		await act(async () => {
@@ -112,18 +106,15 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		expect(screen.queryByText('Update File Explorer?')).toBeNull();
 		await waitFor(() => {
 			expect(mocks.updateWorktree.mock.calls[0]?.[0]).toEqual({
-				requiredCommits: ['a'.repeat(40), 'b'.repeat(40)],
+				requiredCommits: [historicalRange.from, historicalRange.to],
 			});
 		});
 		expect(mocks.getHistory).toHaveBeenCalledTimes(historyCallsBeforeClick);
-		expect(mocks.getHistoricalAction).toHaveBeenCalledWith({
-			from: 'a'.repeat(40),
-			to: 'b'.repeat(40),
-		});
+		expect(mocks.getHistoricalAction).toHaveBeenCalledWith(historicalRange);
 		expect(mocks.navigate).not.toHaveBeenCalled();
 
 		await act(async () => {
-			switched.resolve({ branch: 'main', commit: 'b'.repeat(40), fetched: false });
+			switched.resolve({ branch: 'main', commit: historicalRange.to, fetched: false });
 		});
 		await waitFor(() => {
 			expect(mocks.navigate).toHaveBeenCalled();
@@ -134,11 +125,7 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		mocks.fileExplorerAction = 'update';
 		renderSettings();
 
-		fireEvent.click(
-			await screen.findByRole('button', {
-				name: 'Open /context.md in File Explorer',
-			}),
-		);
+		await openHistoricalFile();
 
 		expect(await screen.findByText('Update File Explorer?')).toBeTruthy();
 		expect(mocks.updateWorktree).not.toHaveBeenCalled();
@@ -158,36 +145,25 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		const updated = deferred<{ branch: string; commit: string }>();
 		mocks.updateWorktree.mockReturnValue(updated.promise);
 		renderSettings();
-		fireEvent.click(
-			await screen.findByRole('button', {
-				name: 'Open /context.md in File Explorer',
-			}),
-		);
+		await openHistoricalFile();
 
 		const confirm = await screen.findByRole('button', { name: 'Update File Explorer' });
 		fireEvent.click(confirm);
 
 		await waitFor(() => {
 			expect(mocks.updateWorktree.mock.calls[0]?.[0]).toEqual({
-				requiredCommits: ['a'.repeat(40), 'b'.repeat(40)],
+				requiredCommits: [historicalRange.from, historicalRange.to],
 			});
 		});
 		expect(mocks.navigate).not.toHaveBeenCalled();
 		expect(confirm.hasAttribute('disabled')).toBe(true);
 
 		await act(async () => {
-			updated.resolve({ branch: 'main', commit: 'b'.repeat(40) });
+			updated.resolve({ branch: 'main', commit: historicalRange.to });
 		});
 
 		await waitFor(() => {
-			expect(mocks.navigate).toHaveBeenCalledWith({
-				to: '/settings/context-explorer',
-				search: {
-					path: '/context.md',
-					from: 'a'.repeat(40),
-					to: 'b'.repeat(40),
-				},
-			});
+			expect(mocks.navigate).toHaveBeenCalledWith(historicalDiffNavigation);
 		});
 	});
 
@@ -195,11 +171,7 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		mocks.fileExplorerAction = 'update';
 		mocks.updateWorktree.mockRejectedValue(new Error('Commit or discard changes before switching branches.'));
 		renderSettings();
-		fireEvent.click(
-			await screen.findByRole('button', {
-				name: 'Open /context.md in File Explorer',
-			}),
-		);
+		await openHistoricalFile();
 
 		fireEvent.click(await screen.findByRole('button', { name: 'Update File Explorer' }));
 
@@ -224,11 +196,7 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		mocks.fileExplorerAction = 'blocked';
 		renderSettings();
 
-		fireEvent.click(
-			await screen.findByRole('button', {
-				name: 'Open /context.md in File Explorer',
-			}),
-		);
+		await openHistoricalFile();
 
 		expect(await screen.findByText('Finish your changes first')).toBeTruthy();
 		expect(
@@ -254,11 +222,7 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		mocks.fileExplorerAction = 'blocked';
 		renderSettings();
 
-		fireEvent.click(
-			await screen.findByRole('button', {
-				name: 'Open /context.md in File Explorer',
-			}),
-		);
+		await openHistoricalFile();
 		fireEvent.click(await screen.findByRole('button', { name: 'Open File Explorer' }));
 
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: '/settings/context-explorer' });
@@ -271,11 +235,7 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 		mocks.updateWorktree.mockRejectedValue(new Error('Commit or discard changes before switching branches.'));
 		renderSettings();
 
-		fireEvent.click(
-			await screen.findByRole('button', {
-				name: 'Open /context.md in File Explorer',
-			}),
-		);
+		await openHistoricalFile();
 
 		expect(await screen.findByText('Finish your changes first')).toBeTruthy();
 		expect(mocks.updateWorktree).toHaveBeenCalledOnce();
@@ -285,12 +245,7 @@ describe('LiveContextUpdateSettings historical diffs', () => {
 });
 
 function renderSettings() {
-	const queryClient = new QueryClient({
-		defaultOptions: {
-			queries: { retry: false },
-			mutations: { retry: false },
-		},
-	});
+	const queryClient = createTestQueryClient();
 	const view = render(
 		<QueryClientProvider client={queryClient}>
 			<LiveContextUpdateSettings
@@ -309,6 +264,14 @@ function renderSettings() {
 	return { ...view, queryClient };
 }
 
+function findHistoricalFileLink() {
+	return screen.findByRole('button', { name: 'Open /context.md in File Explorer' });
+}
+
+async function openHistoricalFile() {
+	fireEvent.click(await findHistoricalFileLink());
+}
+
 function createHistoryEntry() {
 	return {
 		id: 'pull-1',
@@ -316,21 +279,11 @@ function createHistoryEntry() {
 		startedAt: new Date('2026-08-31T10:00:00.000Z'),
 		completedAt: new Date('2026-08-31T10:01:00.000Z'),
 		changed: true,
-		oldCommit: 'a'.repeat(40),
-		newCommit: 'b'.repeat(40),
+		oldCommit: historicalRange.from,
+		newCommit: historicalRange.to,
 		fileCount: 1,
 		files: [{ path: '/context.md', additions: 1, deletions: 1 }],
 		errorMessage: null,
 		fileExplorerAction: mocks.fileExplorerAction,
 	};
-}
-
-function deferred<T>() {
-	let resolve!: (value: T) => void;
-	let reject!: (reason?: unknown) => void;
-	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-		resolve = resolvePromise;
-		reject = rejectPromise;
-	});
-	return { promise, resolve, reject };
 }

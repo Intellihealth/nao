@@ -1,17 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubLocalStorage } from '../helpers/browser-stubs';
 import { getFaviconCandidates } from '@/lib/favicon';
 
-const stored = new Map<string, string>();
-
 beforeEach(() => {
-	stored.clear();
-	vi.stubGlobal('localStorage', {
-		getItem: (key: string) => stored.get(key) ?? null,
-		setItem: (key: string, value: string) => {
-			stored.set(key, value);
-		},
-	});
+	stubLocalStorage();
 	vi.resetModules();
 });
 

@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubLocalStorage, stubResizeObserver } from '../../helpers/browser-stubs';
 import { OrganizationHeading } from '@/components/settings/organization-heading';
 
 const mocks = vi.hoisted(() => ({
@@ -25,19 +26,8 @@ vi.mock('@/components/settings/editable-organization-name', () => ({
 describe('OrganizationHeading', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		const values = new Map<string, string>();
-		vi.stubGlobal('localStorage', {
-			getItem: (key: string) => values.get(key) ?? null,
-			setItem: (key: string, value: string) => values.set(key, value),
-		});
-		vi.stubGlobal(
-			'ResizeObserver',
-			class {
-				observe() {}
-				unobserve() {}
-				disconnect() {}
-			},
-		);
+		stubLocalStorage();
+		stubResizeObserver();
 		Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
 			configurable: true,
 			value: vi.fn(),
@@ -51,18 +41,9 @@ describe('OrganizationHeading', () => {
 	});
 
 	it('persists the displayed organization without invalidating it', async () => {
-		render(
-			<OrganizationHeading
-				organization={{ id: 'current', name: 'Current', role: 'admin' }}
-				organizations={[
-					{ id: 'current', name: 'Current', role: 'admin' },
-					{ id: 'other', name: 'Other', role: 'user' },
-				]}
-				canEdit={false}
-			/>,
-		);
+		renderHeading();
 
-		fireEvent.click(screen.getByRole('button', { name: /Switch organization/ }));
+		openOrganizationSwitcher();
 		const [currentOrganization] = await screen.findAllByRole('option');
 		fireEvent.click(currentOrganization);
 
@@ -72,18 +53,9 @@ describe('OrganizationHeading', () => {
 	});
 
 	it('persists and invalidates after switching organizations', async () => {
-		render(
-			<OrganizationHeading
-				organization={{ id: 'current', name: 'Current', role: 'admin' }}
-				organizations={[
-					{ id: 'current', name: 'Current', role: 'admin' },
-					{ id: 'other', name: 'Other', role: 'user' },
-				]}
-				canEdit={false}
-			/>,
-		);
+		renderHeading();
 
-		fireEvent.click(screen.getByRole('button', { name: /Switch organization/ }));
+		openOrganizationSwitcher();
 		fireEvent.click(await screen.findByRole('option', { name: /Other/ }));
 
 		await waitFor(() => {
@@ -93,3 +65,20 @@ describe('OrganizationHeading', () => {
 		});
 	});
 });
+
+function renderHeading() {
+	render(
+		<OrganizationHeading
+			organization={{ id: 'current', name: 'Current', role: 'admin' }}
+			organizations={[
+				{ id: 'current', name: 'Current', role: 'admin' },
+				{ id: 'other', name: 'Other', role: 'user' },
+			]}
+			canEdit={false}
+		/>,
+	);
+}
+
+function openOrganizationSwitcher() {
+	fireEvent.click(screen.getByRole('button', { name: /Switch organization/ }));
+}

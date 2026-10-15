@@ -9,92 +9,47 @@ vi.mock('@/contexts/agent.provider', () => ({
 }));
 
 describe('getLatestRelevantStoryAgentState', () => {
-	it('treats a stopped streaming story without a stop reason as interrupted', () => {
-		const messages = [
-			createStoryMessage({
-				messageId: 'message-1',
-				storySlug: 'test-long',
-			}),
-		];
+	it.each<[string, Partial<StoryMessageOptions>, boolean, ReturnType<typeof getLatestRelevantStoryAgentState>]>([
+		[
+			'treats a stopped streaming story without a stop reason as interrupted',
+			{},
+			false,
+			{ isStoryStreaming: true, isStoryInterrupted: true },
+		],
+		[
+			'keeps an actively streaming story uninterrupted',
+			{},
+			true,
+			{ isStoryStreaming: true, isStoryInterrupted: false },
+		],
+		[
+			'detects a persisted interrupted streaming story part',
+			{ stopReason: 'interrupted' },
+			true,
+			{ isStoryStreaming: false, isStoryInterrupted: true },
+		],
+		[
+			'detects a persisted interrupted story settled with an output error',
+			{ stopReason: 'interrupted', state: 'output-error' },
+			false,
+			{ isStoryStreaming: false, isStoryInterrupted: true },
+		],
+		[
+			'keeps a completed story on an interrupted message uninterrupted',
+			{ stopReason: 'interrupted', state: 'output-available' },
+			false,
+			{ isStoryStreaming: false, isStoryInterrupted: false },
+		],
+	])('%s', (_scenario, message, isRunning, expected) => {
+		const messages = [createStoryMessage(message)];
 
-		expect(getLatestRelevantStoryAgentState(messages, 'test-long', false)).toEqual({
-			isStoryStreaming: true,
-			isStoryInterrupted: true,
-		});
-	});
-
-	it('keeps an actively streaming story uninterrupted', () => {
-		const messages = [
-			createStoryMessage({
-				messageId: 'message-1',
-				storySlug: 'test-long',
-			}),
-		];
-
-		expect(getLatestRelevantStoryAgentState(messages, 'test-long', true)).toEqual({
-			isStoryStreaming: true,
-			isStoryInterrupted: false,
-		});
-	});
-
-	it('detects a persisted interrupted streaming story part', () => {
-		const messages = [
-			createStoryMessage({
-				messageId: 'message-1',
-				storySlug: 'test-long',
-				stopReason: 'interrupted',
-			}),
-		];
-
-		expect(getLatestRelevantStoryAgentState(messages, 'test-long', true)).toEqual({
-			isStoryStreaming: false,
-			isStoryInterrupted: true,
-		});
-	});
-
-	it('detects a persisted interrupted story settled with an output error', () => {
-		const messages = [
-			createStoryMessage({
-				messageId: 'message-1',
-				storySlug: 'test-long',
-				stopReason: 'interrupted',
-				state: 'output-error',
-			}),
-		];
-
-		expect(getLatestRelevantStoryAgentState(messages, 'test-long', false)).toEqual({
-			isStoryStreaming: false,
-			isStoryInterrupted: true,
-		});
-	});
-
-	it('keeps a completed story on an interrupted message uninterrupted', () => {
-		const messages = [
-			createStoryMessage({
-				messageId: 'message-1',
-				storySlug: 'test-long',
-				stopReason: 'interrupted',
-				state: 'output-available',
-			}),
-		];
-
-		expect(getLatestRelevantStoryAgentState(messages, 'test-long', false)).toEqual({
-			isStoryStreaming: false,
-			isStoryInterrupted: false,
-		});
+		expect(getLatestRelevantStoryAgentState(messages, 'test-long', isRunning)).toEqual(expected);
 	});
 
 	it('uses the newest matching story part', () => {
 		const messages = [
-			createStoryMessage({
-				messageId: 'message-1',
-				storySlug: 'test-long',
-				stopReason: 'interrupted',
-			}),
-			createStoryMessage({
-				messageId: 'message-2',
-				storySlug: 'test-long',
-			}),
+			createStoryMessage({ stopReason: 'interrupted' }),
+			createStoryMessage({ messageId: 'message-2' }),
 		];
 
 		expect(getLatestRelevantStoryAgentState(messages, 'test-long', true)).toEqual({
@@ -104,17 +59,19 @@ describe('getLatestRelevantStoryAgentState', () => {
 	});
 });
 
-function createStoryMessage({
-	messageId,
-	storySlug,
-	stopReason,
-	state = 'input-streaming',
-}: {
+interface StoryMessageOptions {
 	messageId: string;
 	storySlug: string;
 	stopReason?: 'interrupted';
-	state?: 'input-streaming' | 'output-error' | 'output-available';
-}) {
+	state: 'input-streaming' | 'output-error' | 'output-available';
+}
+
+function createStoryMessage({
+	messageId = 'message-1',
+	storySlug = 'test-long',
+	stopReason,
+	state = 'input-streaming',
+}: Partial<StoryMessageOptions>) {
 	return {
 		id: messageId,
 		role: 'assistant',

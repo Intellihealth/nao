@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { stubLocalStorage } from '../helpers/browser-stubs';
 import { CloudBillingAccessBanner } from '@/components/cloud-billing-access-banner';
 
 type RefetchInterval = (query: { state: { data: Record<string, unknown> | undefined } }) => number | false;
@@ -57,11 +58,7 @@ beforeEach(() => {
 	mocks.access = restrictedTrialAccess;
 	mocks.cloudBillingEnabled = true;
 	mocks.refetchInterval = undefined;
-	const values = new Map<string, string>();
-	vi.stubGlobal('localStorage', {
-		getItem: (key: string) => values.get(key) ?? null,
-		setItem: (key: string, value: string) => values.set(key, value),
-	});
+	stubLocalStorage();
 });
 
 afterEach(() => {
@@ -112,14 +109,7 @@ it('warns about a failed payment while access is kept', () => {
 });
 
 it('rounds up the trial countdown within the three-day warning window', () => {
-	const now = new Date('2026-10-05T12:00:00.000Z');
-	vi.useFakeTimers();
-	vi.setSystemTime(now);
-	mocks.access = {
-		...restrictedTrialAccess,
-		hasAccess: true,
-		trialEndsAt: new Date(now.getTime() + DAY_MS + 1),
-	};
+	startTrialEndingIn(DAY_MS + 1);
 
 	render(<CloudBillingAccessBanner />);
 
@@ -127,14 +117,7 @@ it('rounds up the trial countdown within the three-day warning window', () => {
 });
 
 it('stays hidden before the three-day trial warning window', () => {
-	const now = new Date('2026-10-05T12:00:00.000Z');
-	vi.useFakeTimers();
-	vi.setSystemTime(now);
-	mocks.access = {
-		...restrictedTrialAccess,
-		hasAccess: true,
-		trialEndsAt: new Date(now.getTime() + 3 * DAY_MS + 1),
-	};
+	startTrialEndingIn(3 * DAY_MS + 1);
 
 	render(<CloudBillingAccessBanner />);
 
@@ -176,3 +159,14 @@ it('selects the project organization before opening billing management', async (
 		});
 	});
 });
+
+function startTrialEndingIn(remainingMs: number) {
+	const now = new Date('2026-10-05T12:00:00.000Z');
+	vi.useFakeTimers();
+	vi.setSystemTime(now);
+	mocks.access = {
+		...restrictedTrialAccess,
+		hasAccess: true,
+		trialEndsAt: new Date(now.getTime() + remainingMs),
+	};
+}

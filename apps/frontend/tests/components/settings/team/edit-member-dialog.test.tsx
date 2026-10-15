@@ -25,32 +25,14 @@ afterEach(cleanup);
 
 describe('EditMemberDialog role scope', () => {
 	it('keeps project and account project-role editing enabled', () => {
-		render(
-			<EditMemberDialog
-				open
-				onOpenChange={vi.fn()}
-				member={member}
-				isAdmin
-				roleScope='project'
-				onSubmit={vi.fn()}
-			/>,
-		);
+		renderDialog('project');
 
 		expect(screen.getByRole('button', { name: 'Admin' }).hasAttribute('disabled')).toBe(false);
 		expect(screen.queryByText(/Organization roles are assigned/)).toBeNull();
 	});
 
 	it('disables organization role editing and explains the login refresh', () => {
-		render(
-			<EditMemberDialog
-				open
-				onOpenChange={vi.fn()}
-				member={member}
-				isAdmin
-				roleScope='organization'
-				onSubmit={vi.fn()}
-			/>,
-		);
+		renderDialog('organization');
 
 		expect(screen.getByRole('button', { name: 'Admin' }).hasAttribute('disabled')).toBe(true);
 		expect(
@@ -60,3 +42,16 @@ describe('EditMemberDialog role scope', () => {
 		).toBeTruthy();
 	});
 });
+
+function renderDialog(roleScope: 'project' | 'organization') {
+	render(
+		<EditMemberDialog
+			open
+			onOpenChange={vi.fn()}
+			member={member}
+			isAdmin
+			roleScope={roleScope}
+			onSubmit={vi.fn()}
+		/>,
+	);
+}

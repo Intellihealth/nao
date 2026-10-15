@@ -3,6 +3,7 @@
 import { cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { soundNotificationStorage, useStreamEndSound } from '@/hooks/use-stream-end-sound';
 
 const chatIdState = vi.hoisted(() => ({ current: undefined as string | undefined }));
@@ -47,18 +48,6 @@ describe('useStreamEndSound', () => {
 		cleanup();
 		vi.unstubAllGlobals();
 	});
-
-	const renderSound = (isRunning: boolean, chatId: string | undefined) => {
-		chatIdState.current = chatId;
-		const hook = renderHook(({ running }: { running: boolean }) => useStreamEndSound(running), {
-			initialProps: { running: isRunning },
-		});
-		const update = (nextIsRunning: boolean, nextChatId: string | undefined) => {
-			chatIdState.current = nextChatId;
-			hook.rerender({ running: nextIsRunning });
-		};
-		return { ...hook, update };
-	};
 
 	it('plays a sound when a new chat finishes after receiving its id mid-stream', () => {
 		const { update } = renderSound(false, undefined);
@@ -109,14 +98,10 @@ describe('useStreamEndSound', () => {
 	});
 
 	it('keeps the hook silent during StrictMode mount double-effects and plays once on completion', () => {
-		chatIdState.current = 'chat-1';
-		const hook = renderHook(({ running }: { running: boolean }) => useStreamEndSound(running), {
-			initialProps: { running: false },
-			wrapper: StrictMode,
-		});
+		const { update } = renderSound(false, 'chat-1', StrictMode);
 
-		hook.rerender({ running: true });
-		hook.rerender({ running: false });
+		update(true, 'chat-1');
+		update(false, 'chat-1');
 
 		expect(audioContextMock).toHaveBeenCalledTimes(1);
 	});
@@ -131,3 +116,16 @@ describe('useStreamEndSound', () => {
 		expect(audioContextMock).not.toHaveBeenCalled();
 	});
 });
+
+function renderSound(isRunning: boolean, chatId: string | undefined, wrapper?: ComponentType<{ children: ReactNode }>) {
+	chatIdState.current = chatId;
+	const hook = renderHook(({ running }: { running: boolean }) => useStreamEndSound(running), {
+		initialProps: { running: isRunning },
+		wrapper,
+	});
+	const update = (nextIsRunning: boolean, nextChatId: string | undefined) => {
+		chatIdState.current = nextChatId;
+		hook.rerender({ running: nextIsRunning });
+	};
+	return { ...hook, update };
+}

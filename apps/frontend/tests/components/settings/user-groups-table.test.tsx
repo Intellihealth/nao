@@ -13,6 +13,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubClipboard, stubResizeObserver } from '../../helpers/browser-stubs';
+import { openDropdownMenu } from '../../helpers/dropdown-menu';
 import type { UserGroupEditorGroup, UserGroupEditorTab } from '@/components/settings/user-group-editor';
 import type { UserGroupUserDetailTab } from '@/components/settings/user-group-user-detail';
 import type { ProjectRowSecurity } from '@nao/shared';
@@ -278,12 +280,51 @@ const rowSecurityTable = {
 	...rowSecurityIdentity,
 	constraintColumns: ['tenant_id'],
 };
+const rowSecurityRegistry: ProjectRowSecurity = { version: 1, tables: [rowSecurityTable] };
 const orderDatabaseAccess = {
 	mode: 'restricted' as const,
 	strict: true,
 	grants: [{ kind: 'table' as const, ...rowSecurityIdentity }],
 	patterns: [],
 };
+const guidedTenantPolicies = {
+	version: 1 as const,
+	policies: [
+		{
+			...rowSecurityIdentity,
+			access: 'predicate' as const,
+			mode: 'guided' as const,
+			combinator: 'and' as const,
+			conditions: [{ column: 'tenant_id', operator: 'equals' as const, value: '7' }],
+		},
+	],
+};
+const sqlTenantPolicies = {
+	version: 1 as const,
+	policies: [
+		{
+			...rowSecurityIdentity,
+			access: 'predicate' as const,
+			mode: 'sql' as const,
+			predicate: 'WHERE tenant_id = 7',
+		},
+	],
+};
+const fullAccessPolicies = { version: 1 as const, policies: [{ ...rowSecurityIdentity, access: 'full' as const }] };
+const groupWithStaleOidcMapping = {
+	...analysts,
+	ssoMappings: {
+		version: 1 as const,
+		providers: { oidc: ['finance-team'], microsoft: [] },
+	},
+};
+const groupsAtFreeLimit = [
+	allUsers,
+	analysts,
+	{ ...analysts, id: 'finance', name: 'Finance' },
+	{ ...analysts, id: 'operations', name: 'Operations' },
+];
+const oktaConfig = { providerId: 'okta', providerName: 'Okta', organizationRolesManagedByIdp: false };
 const overview = {
 	groups: [allUsers, analysts],
 	users: [
@@ -318,10 +359,7 @@ beforeEach(() => {
 	mocks.mutateAsync.mockReset();
 	mocks.invalidateQueries.mockReset();
 	mocks.copyText.mockReset().mockResolvedValue(undefined);
-	Object.defineProperty(navigator, 'clipboard', {
-		configurable: true,
-		value: { writeText: mocks.copyText },
-	});
+	stubClipboard(mocks.copyText);
 	mocks.useLicenseFeatures.mockReturnValue({
 		isLoading: false,
 		isError: false,
@@ -360,13 +398,7 @@ beforeEach(() => {
 	});
 	mocks.invalidateQueries.mockResolvedValue(undefined);
 	mocks.navigate.mockReset();
-	vi.stubGlobal(
-		'ResizeObserver',
-		vi.fn(() => ({
-			observe: vi.fn(),
-			disconnect: vi.fn(),
-		})),
-	);
+	stubResizeObserver();
 	Object.defineProperty(Element.prototype, 'scrollIntoView', {
 		configurable: true,
 		value: vi.fn(),
@@ -384,19 +416,7 @@ describe('UserGroupsTable', () => {
 		{ isLoading: false, isError: true, actionName: 'Create group unavailable' },
 	])('keeps groups visible but blocks creation while license resolution is unavailable', (licenseState) => {
 		mocks.useLicenseFeatures.mockReturnValue({ ...licenseState, data: undefined });
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: {
-				...overview,
-				groups: [
-					allUsers,
-					analysts,
-					{ ...analysts, id: 'finance', name: 'Finance' },
-					{ ...analysts, id: 'operations', name: 'Operations' },
-				],
-			},
-		});
+		mockOverview({ groups: groupsAtFreeLimit });
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
 		expect(screen.getByRole('row', { name: /All Users/ })).toBeTruthy();
@@ -408,20 +428,12 @@ describe('UserGroupsTable', () => {
 	});
 
 	it('renders free User Groups and keeps existing groups manageable', () => {
-		mocks.useLicenseFeatures.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: { 'user-groups': false },
-		});
+		mockFreeLicense();
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
 		expect(screen.getByRole('row', { name: /Analysts/ })).toBeTruthy();
 		fireEvent.click(screen.getByRole('row', { name: /Analysts/ }));
-		expect(mocks.navigate).toHaveBeenCalledWith({
-			to: '/settings/project/user-groups/$groupId',
-			params: { groupId: 'analysts' },
-			search: { tab: 'features' },
-		});
+		expect(mocks.navigate).toHaveBeenCalledWith(groupEditorRoute('analysts'));
 	});
 
 	it('shows group rows and the create action', () => {
@@ -540,11 +552,7 @@ describe('UserGroupsTable', () => {
 			{ id: 'beta', name: 'Beta', isDefault: false, isLocked: true as const },
 			analysts,
 		];
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: { ...overview, groups },
-		});
+		mockOverview({ groups });
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
 		const expectedNames = ['All Users', 'Analysts', 'Zulu', 'Aardvark', 'Beta'];
@@ -561,28 +569,15 @@ describe('UserGroupsTable', () => {
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
 		fireEvent.click(screen.getByRole('row', { name: /Analysts/ }));
-		expect(mocks.navigate).toHaveBeenCalledWith({
-			to: '/settings/project/user-groups/$groupId',
-			params: { groupId: 'analysts' },
-			search: { tab: 'features' },
-		});
+		expect(mocks.navigate).toHaveBeenCalledWith(groupEditorRoute('analysts'));
 
 		fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
-		expect(mocks.navigate).toHaveBeenLastCalledWith({
-			to: '/settings/project/user-groups/$groupId',
-			params: { groupId: 'new' },
-			search: { tab: 'features' },
-		});
+		expect(mocks.navigate).toHaveBeenLastCalledWith(groupEditorRoute('new'));
 	});
 
 	it('shows locked groups without navigation or active access details', async () => {
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: {
-				...overview,
-				groups: [allUsers, analysts, { id: 'archived', name: 'Archived', isDefault: false, isLocked: true }],
-			},
+		mockOverview({
+			groups: [allUsers, analysts, { id: 'archived', name: 'Archived', isDefault: false, isLocked: true }],
 		});
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
@@ -604,48 +599,17 @@ describe('UserGroupsTable', () => {
 	});
 
 	it('creates on free below the custom-group limit and excludes All Users from the count', () => {
-		mocks.useLicenseFeatures.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: { 'user-groups': false },
-		});
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: {
-				...overview,
-				groups: [allUsers, analysts, { ...analysts, id: 'finance', name: 'Finance' }],
-			},
-		});
+		mockFreeLicense();
+		mockOverview({ groups: [allUsers, analysts, { ...analysts, id: 'finance', name: 'Finance' }] });
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
 		fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
-		expect(mocks.navigate).toHaveBeenCalledWith({
-			to: '/settings/project/user-groups/$groupId',
-			params: { groupId: 'new' },
-			search: { tab: 'features' },
-		});
+		expect(mocks.navigate).toHaveBeenCalledWith(groupEditorRoute('new'));
 	});
 
 	it('opens the Enterprise nudge instead of creating at the free custom-group limit', async () => {
-		mocks.useLicenseFeatures.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: { 'user-groups': false },
-		});
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: {
-				...overview,
-				groups: [
-					allUsers,
-					analysts,
-					{ ...analysts, id: 'finance', name: 'Finance' },
-					{ ...analysts, id: 'operations', name: 'Operations' },
-				],
-			},
-		});
+		mockFreeLicense();
+		mockOverview({ groups: groupsAtFreeLimit });
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
 		const createGroupButton = screen.getByRole('button', { name: 'Create group' });
@@ -662,27 +626,11 @@ describe('UserGroupsTable', () => {
 	});
 
 	it('creates beyond the free limit with the unlimited-groups entitlement', () => {
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: {
-				...overview,
-				groups: [
-					allUsers,
-					analysts,
-					{ ...analysts, id: 'finance', name: 'Finance' },
-					{ ...analysts, id: 'operations', name: 'Operations' },
-				],
-			},
-		});
+		mockOverview({ groups: groupsAtFreeLimit });
 		render(<UserGroupsTable tab='groups' onTabChange={vi.fn()} />);
 
 		fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
-		expect(mocks.navigate).toHaveBeenCalledWith({
-			to: '/settings/project/user-groups/$groupId',
-			params: { groupId: 'new' },
-			search: { tab: 'features' },
-		});
+		expect(mocks.navigate).toHaveBeenCalledWith(groupEditorRoute('new'));
 	});
 
 	it('shows the existing users table', () => {
@@ -725,10 +673,7 @@ describe('UserGroupsTable', () => {
 	it('updates group membership from the dropdown without opening the user', () => {
 		render(<UserGroupsTable tab='users' onTabChange={vi.fn()} />);
 
-		fireEvent.pointerDown(screen.getByRole('button', { name: /Manage groups for Organisation User/ }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openDropdownMenu(/Manage groups for Organisation User/);
 		fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Analysts' }));
 
 		expect(mocks.mutate).toHaveBeenCalledWith({
@@ -741,53 +686,28 @@ describe('UserGroupsTable', () => {
 	});
 
 	it('omits locked groups from user chips and assignment menus', () => {
-		mocks.useQuery.mockReturnValue({
-			isLoading: false,
-			isError: false,
-			data: {
-				...overview,
-				groups: [allUsers, analysts, { id: 'archived', name: 'Archived', isDefault: false, isLocked: true }],
-				memberships: [...overview.memberships, { groupId: 'archived', userId: 'project-user' }],
-			},
+		mockOverview({
+			groups: [allUsers, analysts, { id: 'archived', name: 'Archived', isDefault: false, isLocked: true }],
+			memberships: [...overview.memberships, { groupId: 'archived', userId: 'project-user' }],
 		});
 		render(<UserGroupsTable tab='users' onTabChange={vi.fn()} />);
 
 		expect(
 			screen.getByRole('button', { name: /Manage groups for Project User/ }).getAttribute('aria-label'),
 		).not.toContain('Archived');
-		fireEvent.pointerDown(screen.getByRole('button', { name: /Manage groups for Project User/ }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openDropdownMenu(/Manage groups for Project User/);
 		expect(screen.queryByRole('menuitemcheckbox', { name: 'Archived' })).toBeNull();
 	});
 
 	it('marks SSO-managed memberships and prevents removing them manually', () => {
-		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
-			isLoading: false,
-			isError: false,
-			data:
-				options?.queryKey?.[0] === 'oidc-config'
-					? null
-					: options?.queryKey?.[0] === 'microsoft-config'
-						? false
-						: {
-								...overview,
-								memberships: [
-									...overview.memberships,
-									{ groupId: 'analysts', userId: 'organization-user' },
-								],
-								ssoMemberships: [
-									{ groupId: 'analysts', userId: 'organization-user', provider: 'oidc' },
-								],
-							},
-		}));
+		mockSsoProviders(null, false, {
+			...overview,
+			memberships: [...overview.memberships, { groupId: 'analysts', userId: 'organization-user' }],
+			ssoMemberships: [{ groupId: 'analysts', userId: 'organization-user', provider: 'oidc' }],
+		});
 		render(<UserGroupsTable tab='users' onTabChange={vi.fn()} />);
 
-		fireEvent.pointerDown(screen.getByRole('button', { name: /Manage groups for Organisation User/ }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openDropdownMenu(/Manage groups for Organisation User/);
 		const managedMembership = screen.getByRole('menuitemcheckbox', { name: 'Analysts, managed by SSO' });
 		expect(managedMembership.getAttribute('data-disabled')).not.toBeNull();
 		expect(screen.getByText('Managed by SSO')).toBeTruthy();
@@ -955,16 +875,7 @@ describe('UserGroupEditor', () => {
 		expect(heading).toBeTruthy();
 		expect(heading.closest('section')?.classList.contains('border-t')).toBe(true);
 
-		rerender(
-			<UserGroupEditor
-				group={analysts}
-				activeTab='security'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('security', vi.fn(), analysts));
 		expect(screen.queryByRole('heading', { name: 'Conditional Rules' })).toBeNull();
 		expect(screen.getByRole('heading', { name: 'Row-level security' })).toBeTruthy();
 		expect(screen.getByText('No sensitive tables are configured in the project Security tab.')).toBeTruthy();
@@ -983,18 +894,7 @@ describe('UserGroupEditor', () => {
 	});
 
 	it('preserves policies while row-security metadata loads, then saves when ready', () => {
-		const rowPolicies = {
-			version: 1 as const,
-			policies: [
-				{
-					...rowSecurityIdentity,
-					access: 'predicate' as const,
-					mode: 'guided' as const,
-					combinator: 'and' as const,
-					conditions: [{ column: 'tenant_id', operator: 'equals' as const, value: '7' }],
-				},
-			],
-		};
+		const rowPolicies = guidedTenantPolicies;
 		const rowSecurityQuery: {
 			isLoading: boolean;
 			isError: boolean;
@@ -1012,9 +912,7 @@ describe('UserGroupEditor', () => {
 			databaseAccess: orderDatabaseAccess,
 			rowPolicies,
 		});
-		fireEvent.change(screen.getByRole('textbox', { name: 'Group name' }), {
-			target: { value: 'Updated analysts' },
-		});
+		renameGroup('Updated analysts');
 
 		expect(screen.getByText('Loading row-level security...')).toBeTruthy();
 		expect(screen.queryByText('No sensitive tables are configured in the project Security tab.')).toBeNull();
@@ -1022,17 +920,8 @@ describe('UserGroupEditor', () => {
 		expect(mocks.mutateAsync).not.toHaveBeenCalled();
 
 		rowSecurityQuery.isLoading = false;
-		rowSecurityQuery.data = { version: 1, tables: [rowSecurityTable] };
-		rerender(
-			<UserGroupEditor
-				group={{ ...analysts, databaseAccess: orderDatabaseAccess, rowPolicies }}
-				activeTab='security'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rowSecurityQuery.data = rowSecurityRegistry;
+		rerender(createEditor('security', vi.fn(), { ...analysts, databaseAccess: orderDatabaseAccess, rowPolicies }));
 		expect(screen.getByRole('combobox', { name: 'Row access for orders' })).toBeTruthy();
 
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -1050,22 +939,9 @@ describe('UserGroupEditor', () => {
 		renderEditor('security', vi.fn(), {
 			...analysts,
 			databaseAccess: orderDatabaseAccess,
-			rowPolicies: {
-				version: 1,
-				policies: [
-					{
-						...rowSecurityIdentity,
-						access: 'predicate',
-						mode: 'guided',
-						combinator: 'and',
-						conditions: [{ column: 'tenant_id', operator: 'equals', value: '7' }],
-					},
-				],
-			},
+			rowPolicies: guidedTenantPolicies,
 		});
-		fireEvent.change(screen.getByRole('textbox', { name: 'Group name' }), {
-			target: { value: 'Updated analysts' },
-		});
+		renameGroup('Updated analysts');
 
 		expect(screen.getByText('Failed to load row-level security')).toBeTruthy();
 		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -1075,10 +951,7 @@ describe('UserGroupEditor', () => {
 	});
 
 	it('allows unrelated saves while row-security metadata loads when policies need no metadata', () => {
-		const rowPolicies = {
-			version: 1 as const,
-			policies: [{ ...rowSecurityIdentity, access: 'full' as const }],
-		};
+		const rowPolicies = fullAccessPolicies;
 		enableRowLevelSecurity({
 			isLoading: true,
 			isError: false,
@@ -1090,9 +963,7 @@ describe('UserGroupEditor', () => {
 			databaseAccess: orderDatabaseAccess,
 			rowPolicies,
 		});
-		fireEvent.change(screen.getByRole('textbox', { name: 'Group name' }), {
-			target: { value: 'Updated analysts' },
-		});
+		renameGroup('Updated analysts');
 
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -1109,8 +980,7 @@ describe('UserGroupEditor', () => {
 		};
 		render(<StatefulEditorHarness group={group} initialTab='features' />);
 		fireEvent.click(screen.getByRole('tab', { name: 'Security' }));
-		fireEvent.keyDown(screen.getByRole('combobox', { name: 'Row access for orders' }), { key: 'Enter' });
-		fireEvent.click(screen.getByRole('option', { name: 'Filtered rows' }));
+		selectFilteredRows();
 		fireEvent.click(screen.getByRole('tab', { name: 'Features' }));
 
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -1125,8 +995,7 @@ describe('UserGroupEditor', () => {
 	it('blocks incomplete SQL policies and reveals the field error', () => {
 		enableRowLevelSecurity();
 		renderEditor('security', vi.fn(), { ...analysts, databaseAccess: orderDatabaseAccess });
-		fireEvent.keyDown(screen.getByRole('combobox', { name: 'Row access for orders' }), { key: 'Enter' });
-		fireEvent.click(screen.getByRole('option', { name: 'Filtered rows' }));
+		selectFilteredRows();
 		fireEvent.click(screen.getByRole('button', { name: 'SQL' }));
 
 		expect(screen.queryByText('Enter a WHERE clause.')).toBeNull();
@@ -1138,22 +1007,9 @@ describe('UserGroupEditor', () => {
 
 	it('saves valid row policies', () => {
 		enableRowLevelSecurity();
-		const rowPolicies = {
-			version: 1 as const,
-			policies: [
-				{
-					...rowSecurityIdentity,
-					access: 'predicate' as const,
-					mode: 'guided' as const,
-					combinator: 'and' as const,
-					conditions: [{ column: 'tenant_id', operator: 'equals' as const, value: '7' }],
-				},
-			],
-		};
+		const rowPolicies = guidedTenantPolicies;
 		renderEditor('security', vi.fn(), { ...analysts, databaseAccess: orderDatabaseAccess, rowPolicies });
-		fireEvent.change(screen.getByRole('textbox', { name: 'Group name' }), {
-			target: { value: 'Updated analysts' },
-		});
+		renameGroup('Updated analysts');
 
 		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -1166,17 +1022,7 @@ describe('UserGroupEditor', () => {
 		const onTabChange = vi.fn();
 		renderEditor('features', onTabChange, {
 			...analysts,
-			rowPolicies: {
-				version: 1,
-				policies: [
-					{
-						...rowSecurityIdentity,
-						access: 'predicate',
-						mode: 'sql',
-						predicate: 'WHERE tenant_id = 7',
-					},
-				],
-			},
+			rowPolicies: sqlTenantPolicies,
 		});
 		const nameInput = screen.getByRole('textbox', { name: 'Group name' }) as HTMLInputElement;
 
@@ -1200,10 +1046,7 @@ describe('UserGroupEditor', () => {
 
 	it('prunes draft row policies when Context permissions are removed', () => {
 		enableRowLevelSecurity();
-		const rowPolicies = {
-			version: 1 as const,
-			policies: [{ ...rowSecurityIdentity, access: 'full' as const }],
-		};
+		const rowPolicies = fullAccessPolicies;
 		renderEditor('context', vi.fn(), {
 			...analysts,
 			databaseAccess: orderDatabaseAccess,
@@ -1222,30 +1065,12 @@ describe('UserGroupEditor', () => {
 	});
 
 	it('shows SSO for configured OIDC without stored mappings and saves edits', () => {
-		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
-			isLoading: false,
-			isError: false,
-			data:
-				options?.queryKey?.[0] === 'oidc-config'
-					? { providerId: 'okta', providerName: 'Okta', organizationRolesManagedByIdp: false }
-					: options?.queryKey?.[0] === 'microsoft-config'
-						? false
-						: overview,
-		}));
+		mockSsoProviders(oktaConfig, false);
 		const { rerender } = renderEditor('security');
 		expect(screen.getByRole('tab', { name: 'SSO' })).toBeTruthy();
 		expect(screen.queryByRole('heading', { name: 'SSO group mapping: Okta' })).toBeNull();
 		expect(screen.getByRole('heading', { name: 'Row-level security' })).toBeTruthy();
-		rerender(
-			<UserGroupEditor
-				group={analysts}
-				activeTab='sso'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('sso', vi.fn(), analysts));
 
 		fireEvent.change(screen.getByRole('textbox', { name: 'Okta group name' }), {
 			target: { value: ' Finance-Team ' },
@@ -1267,16 +1092,7 @@ describe('UserGroupEditor', () => {
 	});
 
 	it('shows SSO for configured Microsoft Entra without stored mappings and saves edits', () => {
-		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
-			isLoading: false,
-			isError: false,
-			data:
-				options?.queryKey?.[0] === 'oidc-config'
-					? null
-					: options?.queryKey?.[0] === 'microsoft-config'
-						? true
-						: overview,
-		}));
+		mockSsoProviders(null, true);
 		renderEditor('sso');
 		expect(screen.getByRole('tab', { name: 'SSO' })).toBeTruthy();
 		expect(screen.queryByRole('heading', { name: 'SSO group mapping: Okta' })).toBeNull();
@@ -1305,16 +1121,7 @@ describe('UserGroupEditor', () => {
 	});
 
 	it('hydrates a persisted Microsoft Entra mapping into the editor', () => {
-		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
-			isLoading: false,
-			isError: false,
-			data:
-				options?.queryKey?.[0] === 'oidc-config'
-					? null
-					: options?.queryKey?.[0] === 'microsoft-config'
-						? true
-						: overview,
-		}));
+		mockSsoProviders(null, true);
 		const identifier = 'a0b1c2d3-e4f5-6789-abcd-ef0123456789';
 
 		renderEditor('sso', vi.fn(), {
@@ -1358,16 +1165,7 @@ describe('UserGroupEditor', () => {
 	});
 
 	it('shows distinct OIDC and Microsoft mapping sections together', () => {
-		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
-			isLoading: false,
-			isError: false,
-			data:
-				options?.queryKey?.[0] === 'oidc-config'
-					? { providerId: 'okta', providerName: 'Okta', organizationRolesManagedByIdp: false }
-					: options?.queryKey?.[0] === 'microsoft-config'
-						? true
-						: overview,
-		}));
+		mockSsoProviders(oktaConfig, true);
 		renderEditor('sso');
 
 		const oidcMapping = screen.getByRole('heading', { name: 'SSO group mapping: Okta' });
@@ -1392,13 +1190,7 @@ describe('UserGroupEditor', () => {
 			return { isLoading: false, isError: false, data: overview };
 		});
 		const onTabChange = vi.fn();
-		renderEditor('sso', onTabChange, {
-			...analysts,
-			ssoMappings: {
-				version: 1,
-				providers: { oidc: ['finance-team'], microsoft: [] },
-			},
-		});
+		renderEditor('sso', onTabChange, groupWithStaleOidcMapping);
 
 		expect(screen.queryByRole('tab', { name: 'SSO' })).toBeNull();
 		expect(screen.queryByRole('heading', { name: 'SSO group mapping: OIDC' })).toBeNull();
@@ -1421,13 +1213,7 @@ describe('UserGroupEditor', () => {
 		}));
 
 		const onTabChange = vi.fn();
-		renderEditor('sso', onTabChange, {
-			...analysts,
-			ssoMappings: {
-				version: 1,
-				providers: { oidc: ['finance-team'], microsoft: [] },
-			},
-		});
+		renderEditor('sso', onTabChange, groupWithStaleOidcMapping);
 
 		expect(screen.queryByRole('tab', { name: 'SSO' })).toBeNull();
 		expect(screen.queryByText('finance-team')).toBeNull();
@@ -1454,46 +1240,19 @@ describe('UserGroupEditor', () => {
 	});
 
 	it('resets an unsaved mapping draft when switching groups', () => {
-		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
-			isLoading: false,
-			isError: false,
-			data:
-				options?.queryKey?.[0] === 'oidc-config'
-					? { providerId: 'okta', providerName: 'Okta', organizationRolesManagedByIdp: false }
-					: options?.queryKey?.[0] === 'microsoft-config'
-						? false
-						: overview,
-		}));
+		mockSsoProviders(oktaConfig, false);
 		const { rerender } = renderEditor('sso');
 		fireEvent.change(screen.getByRole('textbox', { name: 'Okta group name' }), {
 			target: { value: 'analysts-draft' },
 		});
 
-		rerender(
-			<UserGroupEditor
-				group={{ ...analysts, id: 'finance', name: 'Finance' }}
-				activeTab='sso'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('sso', vi.fn(), { ...analysts, id: 'finance', name: 'Finance' }));
 
 		expect((screen.getByRole('textbox', { name: 'Okta group name' }) as HTMLInputElement).value).toBe('');
 	});
 
 	it('explains why All Users cannot be mapped', () => {
-		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
-			isLoading: false,
-			isError: false,
-			data:
-				options?.queryKey?.[0] === 'oidc-config'
-					? { providerId: 'okta', providerName: 'Okta', organizationRolesManagedByIdp: false }
-					: options?.queryKey?.[0] === 'microsoft-config'
-						? false
-						: overview,
-		}));
+		mockSsoProviders(oktaConfig, false);
 		renderEditor('sso', vi.fn(), allUsers);
 		expect(screen.getByText(/All Users already includes everyone/)).toBeTruthy();
 		expect(screen.queryByRole('textbox', { name: 'Okta group name' })).toBeNull();
@@ -1501,13 +1260,6 @@ describe('UserGroupEditor', () => {
 
 	it('falls back from SSO after provider queries finish without a configured provider', () => {
 		let configsLoading = true;
-		const groupWithStaleMapping = {
-			...analysts,
-			ssoMappings: {
-				version: 1 as const,
-				providers: { oidc: ['finance-team'], microsoft: [] },
-			},
-		};
 		mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => {
 			const queryKey = options?.queryKey?.[0];
 			const isConfigQuery = queryKey === 'oidc-config' || queryKey === 'microsoft-config';
@@ -1525,7 +1277,7 @@ describe('UserGroupEditor', () => {
 			};
 		});
 		const onTabChange = vi.fn();
-		const { rerender } = renderEditor('sso', onTabChange, groupWithStaleMapping);
+		const { rerender } = renderEditor('sso', onTabChange, groupWithStaleOidcMapping);
 
 		expect(screen.queryByRole('tab', { name: 'SSO' })).toBeNull();
 		expect(screen.getByText('Loading SSO configuration...')).toBeTruthy();
@@ -1533,16 +1285,7 @@ describe('UserGroupEditor', () => {
 		expect(screen.queryByRole('button', { name: 'Remove OIDC group finance-team' })).toBeNull();
 		expect(onTabChange).not.toHaveBeenCalled();
 		configsLoading = false;
-		rerender(
-			<UserGroupEditor
-				group={groupWithStaleMapping}
-				activeTab='sso'
-				onTabChange={onTabChange}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('sso', onTabChange, groupWithStaleOidcMapping));
 
 		expect(screen.queryByText('Loading SSO configuration...')).toBeNull();
 		expect(screen.queryByText('finance-team')).toBeNull();
@@ -1586,30 +1329,12 @@ describe('UserGroupEditor', () => {
 			createdAt: new Date(initialGroup.createdAt),
 			updatedAt: new Date(initialGroup.updatedAt),
 		};
-		rerender(
-			<UserGroupEditor
-				group={refreshedGroup}
-				activeTab='features'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('features', vi.fn(), refreshedGroup));
 
 		expect(nameInput.value).toBe('Draft analysts');
 		expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
 
-		rerender(
-			<UserGroupEditor
-				group={{ ...analysts, id: 'finance', name: 'Finance' }}
-				activeTab='features'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('features', vi.fn(), { ...analysts, id: 'finance', name: 'Finance' }));
 
 		expect(nameInput.value).toBe('Finance');
 		expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
@@ -1618,16 +1343,7 @@ describe('UserGroupEditor', () => {
 	it('synchronizes same-group server updates while the form is clean', () => {
 		const { rerender } = renderEditor();
 
-		rerender(
-			<UserGroupEditor
-				group={{ ...analysts, name: 'Data Analysts' }}
-				activeTab='features'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('features', vi.fn(), { ...analysts, name: 'Data Analysts' }));
 
 		expect((screen.getByRole('textbox', { name: 'Group name' }) as HTMLInputElement).value).toBe('Data Analysts');
 		expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
@@ -1720,20 +1436,9 @@ describe('UserGroupEditor', () => {
 
 	it('hides actions after refreshed group data matches the draft', () => {
 		const { rerender } = renderEditor();
-		fireEvent.change(screen.getByRole('textbox', { name: 'Group name' }), {
-			target: { value: 'Analytics' },
-		});
+		renameGroup('Analytics');
 
-		rerender(
-			<UserGroupEditor
-				group={{ ...analysts, name: 'Analytics' }}
-				activeTab='features'
-				onTabChange={vi.fn()}
-				onCancelNew={vi.fn()}
-				onCreated={vi.fn()}
-				onDeleted={vi.fn()}
-			/>,
-		);
+		rerender(createEditor('features', vi.fn(), { ...analysts, name: 'Analytics' }));
 
 		expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
 		expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
@@ -2019,20 +1724,9 @@ describe('UserGroupUserDetail', () => {
 		enableRowLevelSecurity();
 		renderUserDetail({
 			activeTab: 'security',
-			projectRowSecurity: { version: 1, tables: [rowSecurityTable] },
+			projectRowSecurity: rowSecurityRegistry,
 			effectiveAccess: createEffectiveAccess([
-				{
-					version: 1,
-					policies: [
-						{
-							...rowSecurityIdentity,
-							access: 'predicate',
-							mode: 'guided',
-							combinator: 'and',
-							conditions: [{ column: 'tenant_id', operator: 'equals', value: '7' }],
-						},
-					],
-				},
+				guidedTenantPolicies,
 				{
 					version: 1,
 					policies: [
@@ -2059,21 +1753,8 @@ describe('UserGroupUserDetail', () => {
 		enableRowLevelSecurity();
 		renderUserDetail({
 			activeTab: 'security',
-			projectRowSecurity: { version: 1, tables: [rowSecurityTable] },
-			effectiveAccess: createEffectiveAccess([
-				{
-					version: 1,
-					policies: [
-						{
-							...rowSecurityIdentity,
-							access: 'predicate',
-							mode: 'sql',
-							predicate: 'WHERE tenant_id = 7',
-						},
-					],
-				},
-				{ version: 1, policies: [{ ...rowSecurityIdentity, access: 'full' }] },
-			]),
+			projectRowSecurity: rowSecurityRegistry,
+			effectiveAccess: createEffectiveAccess([sqlTenantPolicies, fullAccessPolicies]),
 		});
 
 		expect(screen.getByText('Full access')).toBeTruthy();
@@ -2086,7 +1767,7 @@ describe('UserGroupUserDetail', () => {
 		enableRowLevelSecurity();
 		renderUserDetail({
 			activeTab: 'security',
-			projectRowSecurity: { version: 1, tables: [rowSecurityTable] },
+			projectRowSecurity: rowSecurityRegistry,
 			effectiveAccess: createEffectiveAccess([]),
 		});
 
@@ -2108,9 +1789,9 @@ describe('UserGroupUserDetail', () => {
 		enableRowLevelSecurity();
 		renderUserDetail({
 			activeTab: 'security',
-			projectRowSecurity: { version: 1, tables: [rowSecurityTable] },
+			projectRowSecurity: rowSecurityRegistry,
 			effectiveAccess: {
-				...createEffectiveAccess([{ version: 1, policies: [{ ...rowSecurityIdentity, access: 'full' }] }]),
+				...createEffectiveAccess([fullAccessPolicies]),
 				databaseAccess: EMPTY_DATABASE_CONTEXT_ACCESS,
 			},
 		});
@@ -2125,20 +1806,8 @@ describe('UserGroupUserDetail', () => {
 	it('does not show filters as active when row-level security is unlicensed', () => {
 		renderUserDetail({
 			activeTab: 'security',
-			projectRowSecurity: { version: 1, tables: [rowSecurityTable] },
-			effectiveAccess: createEffectiveAccess([
-				{
-					version: 1,
-					policies: [
-						{
-							...rowSecurityIdentity,
-							access: 'predicate',
-							mode: 'sql',
-							predicate: 'WHERE tenant_id = 7',
-						},
-					],
-				},
-			]),
+			projectRowSecurity: rowSecurityRegistry,
+			effectiveAccess: createEffectiveAccess([sqlTenantPolicies]),
 		});
 
 		expect(screen.getByText('Enterprise feature inactive')).toBeTruthy();
@@ -2199,6 +1868,35 @@ describe('UserGroupUserDetail', () => {
 	});
 });
 
+function mockOverview(overrides: Record<string, unknown>) {
+	mocks.useQuery.mockReturnValue({ isLoading: false, isError: false, data: { ...overview, ...overrides } });
+}
+
+function mockFreeLicense() {
+	mocks.useLicenseFeatures.mockReturnValue({ isLoading: false, isError: false, data: { 'user-groups': false } });
+}
+
+function mockSsoProviders(
+	oidcConfig: typeof oktaConfig | null,
+	microsoftConfigured: boolean,
+	fallback: unknown = overview,
+) {
+	mocks.useQuery.mockImplementation((options?: { queryKey?: string[] }) => ({
+		isLoading: false,
+		isError: false,
+		data:
+			options?.queryKey?.[0] === 'oidc-config'
+				? oidcConfig
+				: options?.queryKey?.[0] === 'microsoft-config'
+					? microsoftConfigured
+					: fallback,
+	}));
+}
+
+function groupEditorRoute(groupId: string) {
+	return { to: '/settings/project/user-groups/$groupId', params: { groupId }, search: { tab: 'features' } };
+}
+
 function enableRowLevelSecurity(
 	rowSecurityQuery: {
 		isLoading: boolean;
@@ -2208,7 +1906,7 @@ function enableRowLevelSecurity(
 	} = {
 		isLoading: false,
 		isError: false,
-		data: { version: 1, tables: [rowSecurityTable] },
+		data: rowSecurityRegistry,
 	},
 ) {
 	mocks.useLicenseFeatures.mockReturnValue({
@@ -2250,7 +1948,15 @@ function renderEditor(
 	onTabChange = vi.fn(),
 	group: UserGroupEditorGroup | 'new' = analysts,
 ) {
-	return render(
+	return render(createEditor(activeTab, onTabChange, group));
+}
+
+function createEditor(
+	activeTab: UserGroupEditorTab = 'features',
+	onTabChange = vi.fn(),
+	group: UserGroupEditorGroup | 'new' = analysts,
+) {
+	return (
 		<UserGroupEditor
 			group={group}
 			activeTab={activeTab}
@@ -2258,75 +1964,30 @@ function renderEditor(
 			onCancelNew={vi.fn()}
 			onCreated={vi.fn()}
 			onDeleted={vi.fn()}
-		/>,
+		/>
 	);
 }
 
+function renameGroup(name: string) {
+	fireEvent.change(screen.getByRole('textbox', { name: 'Group name' }), { target: { value: name } });
+}
+
+function selectFilteredRows() {
+	fireEvent.keyDown(screen.getByRole('combobox', { name: 'Row access for orders' }), { key: 'Enter' });
+	fireEvent.click(screen.getByRole('option', { name: 'Filtered rows' }));
+}
+
 function renderUserDetail({
-	groups = [allUsers, analysts],
 	activeTab = 'features',
-	contextObjects = [],
-	docsEntries = [],
-	filesEntries = [],
-	databaseSyncState = 'ready',
-	docsSyncState = 'ready',
-	filesSyncState = 'ready',
-	databaseCatalogState = 'ready',
-	docsCatalogState = 'ready',
-	filesCatalogState = 'ready',
-	onRetryDatabaseCatalog,
-	onRetryDocsCatalog,
-	onRetryFilesCatalog,
-	projectRowSecurity = EMPTY_PROJECT_ROW_SECURITY,
-	securityState = 'ready',
-	onRetrySecurity,
-	effectiveAccess = {
-		features: { storyCreation: true, customStoryCreation: false, automationCreation: false },
-		toolCallDensityPolicy: { defaultDensity: 'compact', canChange: true },
-		databaseAccess: { mode: 'restricted', strict: true, grants: [], patterns: [] },
-		docsAccess: { mode: 'restricted', grants: [] },
-		filesAccess: EMPTY_FILES_CONTEXT_ACCESS,
-		rowPolicies: [],
-	},
-}: {
-	groups?: UserGroupEditorGroup[];
-	activeTab?: UserGroupUserDetailTab;
-	contextObjects?: Array<{ databaseType: string; database: string; schema: string; table: string }>;
-	docsEntries?: Array<{ kind: 'folder' | 'file'; path: string }>;
-	filesEntries?: Array<{ kind: 'folder' | 'file'; path: string }>;
-	databaseSyncState?: 'missing' | 'ready';
-	docsSyncState?: 'missing' | 'ready';
-	filesSyncState?: 'missing' | 'ready';
-	databaseCatalogState?: 'loading' | 'error' | 'ready';
-	docsCatalogState?: 'loading' | 'error' | 'ready';
-	filesCatalogState?: 'loading' | 'error' | 'ready';
-	onRetryDatabaseCatalog?: () => void;
-	onRetryDocsCatalog?: () => void;
-	onRetryFilesCatalog?: () => void;
-	projectRowSecurity?: ComponentProps<typeof UserGroupUserDetail>['projectRowSecurity'];
-	securityState?: ComponentProps<typeof UserGroupUserDetail>['securityState'];
-	onRetrySecurity?: () => void;
-	effectiveAccess?: ComponentProps<typeof UserGroupUserDetail>['effectiveAccess'];
-} = {}) {
+	...props
+}: Partial<ComponentProps<typeof UserGroupUserDetail>> = {}) {
 	return render(
 		createUserDetail(activeTab, {
-			groups,
-			contextObjects,
-			docsEntries,
-			filesEntries,
-			effectiveAccess,
-			databaseSyncState,
-			docsSyncState,
-			filesSyncState,
-			databaseCatalogState,
-			docsCatalogState,
-			filesCatalogState,
-			onRetryDatabaseCatalog,
-			onRetryDocsCatalog,
-			onRetryFilesCatalog,
-			projectRowSecurity,
-			securityState,
-			onRetrySecurity,
+			effectiveAccess: {
+				...createEffectiveAccess([]),
+				databaseAccess: { mode: 'restricted', strict: true, grants: [], patterns: [] },
+			},
+			...props,
 		}),
 	);
 }

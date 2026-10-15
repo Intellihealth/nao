@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { openDropdownMenu } from '../helpers/dropdown-menu';
 import type * as TableExport from '@/lib/table-export';
 import { ExportDataMenu } from '@/components/export-data-menu';
 
@@ -51,6 +52,6 @@ function renderMenu() {
 }
 
 async function selectMenuItem(label: string) {
-	fireEvent.pointerDown(screen.getByRole('button', { name: 'Export' }), { button: 0, ctrlKey: false });
+	openDropdownMenu('Export');
 	fireEvent.click(await screen.findByText(label));
 }

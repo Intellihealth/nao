@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createTestQueryClient } from '../../helpers/query-client';
 import { ChatsReplayPage } from '@/components/settings/chats-replay-page';
 
 const mocks = vi.hoisted(() => ({
@@ -33,18 +34,7 @@ describe('ChatsReplayPage', () => {
 	});
 
 	it('uses 20 rows as the production default page size', async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		render(
-			<QueryClientProvider client={queryClient}>
-				<ChatsReplayPage
-					selectedUserNames={undefined}
-					selectedFeedbackStates={undefined}
-					selectedToolStates={undefined}
-					selectedSources={undefined}
-					onOpenChat={vi.fn()}
-				/>
-			</QueryClientProvider>,
-		);
+		renderPage();
 
 		expect(screen.getByRole('combobox').textContent).toContain('20');
 		await waitFor(() =>
@@ -58,22 +48,25 @@ describe('ChatsReplayPage', () => {
 	});
 
 	it('sends the search term to the chats query', async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		render(
-			<QueryClientProvider client={queryClient}>
-				<ChatsReplayPage
-					search='revenue'
-					selectedUserNames={undefined}
-					selectedFeedbackStates={undefined}
-					selectedToolStates={undefined}
-					selectedSources={undefined}
-					onOpenChat={vi.fn()}
-				/>
-			</QueryClientProvider>,
-		);
+		renderPage('revenue');
 
 		await waitFor(() =>
 			expect(mocks.queryOptions).toHaveBeenCalledWith(expect.objectContaining({ page: 0, search: 'revenue' })),
 		);
 	});
 });
+
+function renderPage(search?: string) {
+	render(
+		<QueryClientProvider client={createTestQueryClient()}>
+			<ChatsReplayPage
+				search={search}
+				selectedUserNames={undefined}
+				selectedFeedbackStates={undefined}
+				selectedToolStates={undefined}
+				selectedSources={undefined}
+				onOpenChat={vi.fn()}
+			/>
+		</QueryClientProvider>,
+	);
+}

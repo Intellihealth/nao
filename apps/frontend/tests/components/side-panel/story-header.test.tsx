@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { openDropdownMenu } from '../../helpers/dropdown-menu';
 import type { StoryHeaderProps } from '@/components/side-panel/story-header';
 import type { StoryViewMode } from '@/components/side-panel/story-viewer.types';
 import { StoryHeader } from '@/components/side-panel/story-header';
@@ -57,11 +58,12 @@ vi.mock('@/main', () => ({
 	},
 }));
 
+afterEach(cleanup);
+
 describe('StoryHeader actions', () => {
 	beforeEach(() => {
 		favoritesQuery.data = undefined;
 	});
-	afterEach(cleanup);
 
 	it('renders a share button that calls onShare', () => {
 		const onShare = vi.fn();
@@ -94,7 +96,7 @@ describe('StoryHeader actions', () => {
 	it('lists download, favorite, analytics and expand in the actions menu', () => {
 		renderHeader({ storyId: 'story-1' });
 
-		openActionsMenu();
+		openDropdownMenu('More actions');
 
 		expect(screen.getByRole('menuitem', { name: 'Download' })).toBeDefined();
 		expect(screen.getByRole('menuitem', { name: 'Favorite' })).toBeDefined();
@@ -108,7 +110,7 @@ describe('StoryHeader actions', () => {
 
 		expect(screen.getByRole('button', { name: 'Unfavorite' })).toBeDefined();
 
-		openActionsMenu();
+		openDropdownMenu('More actions');
 
 		expect(screen.getByRole('menuitem', { name: 'Unfavorite' })).toBeDefined();
 	});
@@ -121,8 +123,6 @@ describe('StoryHeader actions', () => {
 });
 
 describe('StoryHeader editing subheader', () => {
-	afterEach(cleanup);
-
 	it('shows save controls whenever visual Edit mode is active', () => {
 		renderHeader({ viewMode: 'edit' });
 
@@ -144,10 +144,6 @@ describe('StoryHeader editing subheader', () => {
 		expect(screen.getByRole('button', { name: /save/i })).toBeDefined();
 	});
 });
-
-function openActionsMenu() {
-	fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions' }), { button: 0, ctrlKey: false });
-}
 
 function renderHeader(overrides: Partial<ClassicStoryHeaderProps>) {
 	const props: ClassicStoryHeaderProps = {

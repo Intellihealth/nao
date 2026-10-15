@@ -2,6 +2,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { deferred } from '../../../helpers/deferred';
 import type { StoryCodeViewHandle } from '@/components/side-panel/story-code-view';
 import type { MutableRefObject } from 'react';
 import { useStoryViewerVersionActions } from '@/components/side-panel/hooks/use-story-viewer-version-actions';
@@ -68,6 +69,8 @@ interface HookProps {
 }
 
 const codeViewRef = { current: null } as MutableRefObject<StoryCodeViewHandle | null>;
+const storyA = { chatId: 'chat-a', storySlug: 'story-a', storyTitle: 'Story A', persistedCode: '# Story A' };
+const storyB = { chatId: 'chat-b', storySlug: 'story-b', storyTitle: 'Story B', persistedCode: '# Story B' };
 
 describe('useStoryViewerVersionActions', () => {
 	beforeEach(() => {
@@ -83,32 +86,11 @@ describe('useStoryViewerVersionActions', () => {
 		mocks.mutateAsync.mockImplementationOnce(() => firstMutation.promise);
 		const onStoryASaved = vi.fn();
 		const onStoryBSaved = vi.fn();
-		const { result, rerender } = renderHook(
-			(props: HookProps) =>
-				useStoryViewerVersionActions({
-					chatId: props.chatId,
-					storySlug: props.storySlug,
-					storyTitle: props.storyTitle,
-					currentVersionCode: props.persistedCode,
-					isViewingLatest: true,
-					goToLatestVersion: vi.fn(),
-					codeViewRef,
-					getCurrentCode: () => props.currentCode,
-					viewMode: 'edit',
-					setViewMode: vi.fn(),
-					onVersionSaved: props.onVersionSaved,
-				}),
-			{
-				initialProps: {
-					chatId: 'chat-a',
-					storySlug: 'story-a',
-					storyTitle: 'Story A',
-					persistedCode: '# Story A',
-					currentCode: '# Story A edit',
-					onVersionSaved: onStoryASaved,
-				},
-			},
-		);
+		const { result, rerender } = renderVersionActions({
+			...storyA,
+			currentCode: '# Story A edit',
+			onVersionSaved: onStoryASaved,
+		});
 
 		let savePromise!: Promise<string>;
 		act(() => {
@@ -116,14 +98,7 @@ describe('useStoryViewerVersionActions', () => {
 		});
 		await waitFor(() => expect(mocks.mutateAsync).toHaveBeenCalledOnce());
 
-		rerender({
-			chatId: 'chat-b',
-			storySlug: 'story-b',
-			storyTitle: 'Story B',
-			persistedCode: '# Story B',
-			currentCode: '# Story B',
-			onVersionSaved: onStoryBSaved,
-		});
+		rerender({ ...storyB, currentCode: '# Story B', onVersionSaved: onStoryBSaved });
 
 		await act(async () => {
 			firstMutation.resolve();
@@ -142,14 +117,7 @@ describe('useStoryViewerVersionActions', () => {
 		expect(onStoryASaved).not.toHaveBeenCalled();
 		expect(onStoryBSaved).not.toHaveBeenCalled();
 
-		rerender({
-			chatId: 'chat-b',
-			storySlug: 'story-b',
-			storyTitle: 'Story B',
-			persistedCode: '# Story B',
-			currentCode: '# Story B edit',
-			onVersionSaved: onStoryBSaved,
-		});
+		rerender({ ...storyB, currentCode: '# Story B edit', onVersionSaved: onStoryBSaved });
 
 		await act(async () => {
 			expect(await result.current.saveCurrentVersion()).toBe('saved');
@@ -173,32 +141,7 @@ describe('useStoryViewerVersionActions', () => {
 		mocks.mutateAsync.mockImplementationOnce(() => firstMutation.promise);
 		mocks.invalidateQueries.mockImplementationOnce(() => refresh.promise);
 		const onVersionSaved = vi.fn();
-		const { result, rerender } = renderHook(
-			(props: HookProps) =>
-				useStoryViewerVersionActions({
-					chatId: props.chatId,
-					storySlug: props.storySlug,
-					storyTitle: props.storyTitle,
-					currentVersionCode: props.persistedCode,
-					isViewingLatest: true,
-					goToLatestVersion: vi.fn(),
-					codeViewRef,
-					getCurrentCode: () => props.currentCode,
-					viewMode: 'edit',
-					setViewMode: vi.fn(),
-					onVersionSaved: props.onVersionSaved,
-				}),
-			{
-				initialProps: {
-					chatId: 'chat-a',
-					storySlug: 'story-a',
-					storyTitle: 'Story A',
-					persistedCode: '# Story A',
-					currentCode: '# First edit',
-					onVersionSaved,
-				},
-			},
-		);
+		const { result, rerender } = renderVersionActions({ ...storyA, currentCode: '# First edit', onVersionSaved });
 
 		let savePromise!: Promise<string>;
 		act(() => {
@@ -206,14 +149,7 @@ describe('useStoryViewerVersionActions', () => {
 		});
 		await waitFor(() => expect(mocks.mutateAsync).toHaveBeenCalledOnce());
 
-		rerender({
-			chatId: 'chat-a',
-			storySlug: 'story-a',
-			storyTitle: 'Story A',
-			persistedCode: '# Story A',
-			currentCode: '# Newer edit',
-			onVersionSaved,
-		});
+		rerender({ ...storyA, currentCode: '# Newer edit', onVersionSaved });
 
 		act(() => {
 			firstMutation.resolve();
@@ -236,10 +172,22 @@ describe('useStoryViewerVersionActions', () => {
 	});
 });
 
-function deferred<T>() {
-	let resolve!: (value: T | PromiseLike<T>) => void;
-	const promise = new Promise<T>((promiseResolve) => {
-		resolve = promiseResolve;
-	});
-	return { promise, resolve };
+function renderVersionActions(initialProps: HookProps) {
+	return renderHook(
+		(props: HookProps) =>
+			useStoryViewerVersionActions({
+				chatId: props.chatId,
+				storySlug: props.storySlug,
+				storyTitle: props.storyTitle,
+				currentVersionCode: props.persistedCode,
+				isViewingLatest: true,
+				goToLatestVersion: vi.fn(),
+				codeViewRef,
+				getCurrentCode: () => props.currentCode,
+				viewMode: 'edit',
+				setViewMode: vi.fn(),
+				onVersionSaved: props.onVersionSaved,
+			}),
+		{ initialProps },
+	);
 }

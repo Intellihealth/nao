@@ -3,6 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubResizeObserver } from '../../helpers/browser-stubs';
+import { openDropdownMenu } from '../../helpers/dropdown-menu';
 import type { MouseEventHandler, ReactNode } from 'react';
 import { ReadOnlyProjectUsers, ProjectUsersTable } from '@/components/settings/project-users-table';
 
@@ -125,13 +127,7 @@ beforeEach(() => {
 	mocks.invalidateQueries.mockResolvedValue(undefined);
 	mocks.invalidateUserGroupQueries.mockResolvedValue(undefined);
 	mocks.useQuery.mockReturnValue({ data: { naoMode: 'self-hosted' } });
-	vi.stubGlobal(
-		'ResizeObserver',
-		vi.fn(() => ({
-			observe: vi.fn(),
-			disconnect: vi.fn(),
-		})),
-	);
+	stubResizeObserver();
 });
 
 afterEach(() => {
@@ -144,10 +140,7 @@ describe('ProjectUsersTable member management', () => {
 		renderTable();
 
 		fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
-		fireEvent.pointerDown(screen.getByRole('button', { name: /Select user groups/ }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openDropdownMenu(/Select user groups/);
 		fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Analysts' }));
 		fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
 		fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
@@ -187,10 +180,7 @@ describe('ProjectUsersTable member management', () => {
 	it('removes a project member after confirmation', async () => {
 		renderTable();
 
-		fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for Project User' }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openProjectUserActions();
 		fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }));
 		fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
 
@@ -201,10 +191,7 @@ describe('ProjectUsersTable member management', () => {
 	it('opens the edit dialog for a project member', () => {
 		renderTable();
 
-		fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for Project User' }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openProjectUserActions();
 		fireEvent.click(screen.getByRole('menuitem', { name: 'Edit user' }));
 
 		expect(screen.getByText('Editing Project User')).toBeTruthy();
@@ -213,12 +200,7 @@ describe('ProjectUsersTable member management', () => {
 	it('resets a password outside cloud mode and shows the new credentials', async () => {
 		renderTable();
 
-		fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for Project User' }), {
-			button: 0,
-			ctrlKey: false,
-		});
-		fireEvent.click(screen.getByRole('menuitem', { name: 'Reset password' }));
-		fireEvent.click(await screen.findByRole('button', { name: 'Reset password' }));
+		await resetProjectUserPassword();
 
 		await waitFor(() => expect(mocks.resetPassword).toHaveBeenCalledWith({ userId: 'project-user' }));
 		expect(await screen.findByText('Password: generated-password')).toBeTruthy();
@@ -228,12 +210,7 @@ describe('ProjectUsersTable member management', () => {
 		mocks.resetPassword.mockRejectedValue(new Error('Account does not use password authentication'));
 		renderTable();
 
-		fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for Project User' }), {
-			button: 0,
-			ctrlKey: false,
-		});
-		fireEvent.click(screen.getByRole('menuitem', { name: 'Reset password' }));
-		fireEvent.click(await screen.findByRole('button', { name: 'Reset password' }));
+		await resetProjectUserPassword();
 
 		expect(await screen.findByText('Account does not use password authentication')).toBeTruthy();
 		expect(screen.queryByText(/^Password:/)).toBeNull();
@@ -243,10 +220,7 @@ describe('ProjectUsersTable member management', () => {
 		mocks.useQuery.mockReturnValue({ data: { naoMode: 'cloud' } });
 		renderTable();
 
-		fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for Project User' }), {
-			button: 0,
-			ctrlKey: false,
-		});
+		openProjectUserActions();
 
 		expect(screen.getByRole('menuitem', { name: 'Edit user' })).toBeTruthy();
 		expect(screen.queryByRole('menuitem', { name: 'Reset password' })).toBeNull();
@@ -288,4 +262,14 @@ function renderTable() {
 			onOpenUser={vi.fn()}
 		/>,
 	);
+}
+
+function openProjectUserActions() {
+	openDropdownMenu('Actions for Project User');
+}
+
+async function resetProjectUserPassword() {
+	openProjectUserActions();
+	fireEvent.click(screen.getByRole('menuitem', { name: 'Reset password' }));
+	fireEvent.click(await screen.findByRole('button', { name: 'Reset password' }));
 }

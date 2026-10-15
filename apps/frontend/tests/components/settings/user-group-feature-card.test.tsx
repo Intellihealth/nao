@@ -10,21 +10,21 @@ afterEach(cleanup);
 
 const storyFeature = USER_GROUP_FEATURE_DEFINITIONS.find((feature) => feature.key === 'storyCreation')!;
 const automationFeature = USER_GROUP_FEATURE_DEFINITIONS.find((feature) => feature.key === 'automationCreation')!;
+const storyCardName = `${storyFeature.label}. ${storyFeature.description}`;
 
 describe('UserGroupFeatureCard', () => {
 	it('renders selected and unselected states with button semantics', () => {
 		const { rerender } = render(
 			<UserGroupFeatureCard feature={storyFeature} selected={false} onSelectedChange={vi.fn()} />,
 		);
-		const accessibleName = `${storyFeature.label}. ${storyFeature.description}`;
-		const card = screen.getByRole('button', { name: accessibleName });
+		const card = screen.getByRole('button', { name: storyCardName });
 
 		expect(card.getAttribute('aria-pressed')).toBe('false');
 		expect(card.getAttribute('type')).toBe('button');
 
 		rerender(<UserGroupFeatureCard feature={storyFeature} selected onSelectedChange={vi.fn()} />);
 
-		expect(screen.getByRole('button', { name: accessibleName }).getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByRole('button', { name: storyCardName }).getAttribute('aria-pressed')).toBe('true');
 	});
 
 	it('toggles the selected value when clicked', () => {
@@ -32,13 +32,12 @@ describe('UserGroupFeatureCard', () => {
 		const { rerender } = render(
 			<UserGroupFeatureCard feature={storyFeature} selected={false} onSelectedChange={onSelectedChange} />,
 		);
-		const accessibleName = `${storyFeature.label}. ${storyFeature.description}`;
 
-		fireEvent.click(screen.getByRole('button', { name: accessibleName }));
+		fireEvent.click(screen.getByRole('button', { name: storyCardName }));
 		expect(onSelectedChange).toHaveBeenLastCalledWith(true);
 
 		rerender(<UserGroupFeatureCard feature={storyFeature} selected onSelectedChange={onSelectedChange} />);
-		fireEvent.click(screen.getByRole('button', { name: accessibleName }));
+		fireEvent.click(screen.getByRole('button', { name: storyCardName }));
 		expect(onSelectedChange).toHaveBeenLastCalledWith(false);
 	});
 
