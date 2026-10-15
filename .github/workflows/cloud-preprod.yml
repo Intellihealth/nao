@@ -15,7 +15,7 @@ permissions:
 # the `nao-previews` GCP project, reusing the PR preview registry and Workload Identity Federation,
 # behind the global load balancer through a dedicated serverless NEG. The SQLite database, projects
 # and storage live on the container filesystem, so like PR previews all data is reset on every deploy.
-# Access is GitHub-only and restricted to the preview allowlist.
+# Access is Google SSO only and restricted to @getnao.io accounts.
 env:
     GCP_PROJECT_ID: nao-previews
     GCP_REGION: europe-west9
@@ -99,10 +99,11 @@ jobs:
                   RUNTIME_DB_URI: sqlite:/app/db.sqlite
                   RUNTIME_ENABLE_USER_LOGIN: 'false'
                   RUNTIME_ENABLE_USER_SIGNUP: 'false'
-                  RUNTIME_GITHUB_SSO: 'true'
+                  RUNTIME_GOOGLE_CLIENT_ID: ${{ secrets.NIMBUS_GOOGLE_CLIENT_ID }}
+                  RUNTIME_GOOGLE_CLIENT_SECRET: ${{ secrets.NIMBUS_GOOGLE_CLIENT_SECRET }}
+                  RUNTIME_GOOGLE_AUTH_DOMAINS: getnao.io
                   RUNTIME_GITHUB_CLIENT_ID: ${{ secrets.NIMBUS_GITHUB_CLIENT_ID }}
                   RUNTIME_GITHUB_CLIENT_SECRET: ${{ secrets.NIMBUS_GITHUB_CLIENT_SECRET }}
-                  RUNTIME_GITHUB_ALLOWED_USERS: ${{ secrets.PREVIEW_GITHUB_ALLOWED_USERS }}
                   RUNTIME_OPENAI_API_KEY: ${{ secrets.NIMBUS_OPENAI_API_KEY }}
                   RUNTIME_CLOUD_GITHUB_PROJECT_ORG: ${{ secrets.NIMBUS_GITHUB_PROJECT_ORG }}
                   RUNTIME_CLOUD_GITHUB_PROJECT_APP_ID: ${{ secrets.NIMBUS_GITHUB_PROJECT_APP_ID }}
