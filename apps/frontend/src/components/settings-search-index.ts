@@ -19,6 +19,7 @@ export interface SettingsSearchEntry {
 	cloudHidden?: boolean;
 	cloudOnly?: boolean;
 	cloudBillingOnly?: boolean;
+	cloudBillingDisabledOnly?: boolean;
 	betaSubagentsOnly?: boolean;
 }
 
@@ -40,6 +41,16 @@ export const settingsSearchIndex: SettingsSearchEntry[] = [
 		keywords: ['wallet', 'gift', 'ledger', 'billing', 'refill', 'top up', 'organization credits'],
 		orgAdminOnly: true,
 		cloudBillingOnly: true,
+	},
+	{
+		page: '/settings/credits-wallet',
+		pageLabel: 'Organization credits',
+		title: 'Balance',
+		description: "View your organization's nao credit balance and review credit history.",
+		keywords: ['wallet', 'gift', 'ledger', 'credit history', 'organization credits'],
+		orgAdminOnly: true,
+		cloudOnly: true,
+		cloudBillingDisabledOnly: true,
 	},
 	{
 		page: '/settings/usage',

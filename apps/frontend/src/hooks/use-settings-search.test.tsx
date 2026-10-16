@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSettingsSearch } from './use-settings-search';
 
 const mocks = vi.hoisted(() => ({
+	config: {
+		betaSubagentsEnabled: false,
+		cloudBillingEnabled: false,
+	},
+	isCloud: false,
 	permissions: {
 		canViewUsage: false,
 		isAdmin: false,
@@ -16,7 +21,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-	useQuery: () => ({ data: { betaSubagentsEnabled: false, cloudBillingEnabled: false } }),
+	useQuery: () => ({ data: mocks.config }),
 }));
 
 vi.mock('@/hooks/use-license', () => ({
@@ -24,7 +29,7 @@ vi.mock('@/hooks/use-license', () => ({
 }));
 
 vi.mock('@/hooks/use-nao-mode', () => ({
-	useIsCloud: () => false,
+	useIsCloud: () => mocks.isCloud,
 }));
 
 vi.mock('@/hooks/use-permissions', () => ({
@@ -43,6 +48,8 @@ vi.mock('@/main', () => ({
 
 describe('useSettingsSearch', () => {
 	beforeEach(() => {
+		mocks.config.cloudBillingEnabled = false;
+		mocks.isCloud = false;
 		Object.assign(mocks.permissions, {
 			canViewUsage: false,
 			isAdmin: false,
@@ -63,5 +70,18 @@ describe('useSettingsSearch', () => {
 		rerender();
 
 		expect(result.current.some((entry) => entry.title === title)).toBe(true);
+	});
+
+	it('targets the credits-only page when cloud billing is disabled', () => {
+		mocks.isCloud = true;
+		Object.assign(mocks.permissions, { isOrgAdmin: true, isViewer: false });
+		const { result, rerender } = renderHook(() => useSettingsSearch('Balance'));
+
+		expect(result.current.find((entry) => entry.title === 'Balance')?.page).toBe('/settings/credits-wallet');
+
+		mocks.config.cloudBillingEnabled = true;
+		rerender();
+
+		expect(result.current.find((entry) => entry.title === 'Balance')?.page).toBe('/settings/organization/billing');
 	});
 });

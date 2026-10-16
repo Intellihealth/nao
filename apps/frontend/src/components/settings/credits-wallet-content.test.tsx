@@ -233,11 +233,35 @@ describe('credit settings content', () => {
 			lifetimeDebitedMicroUsd: 2_000_000,
 			enabled: true,
 		});
-		mocks.listLedger.mockResolvedValue({ groups: [], nextCursor: null });
+		mocks.listLedger.mockResolvedValue({
+			groups: [
+				{
+					id: 'gift',
+					createdAt: new Date(),
+					grantedForUserName: 'Managed User',
+					usageUserName: null,
+					entries: [
+						{
+							entryType: 'gift',
+							deltaMicroUsd: 5_000_000,
+							balanceAfterMicroUsd: 23_000_000,
+							transactionSequence: 1,
+							metadata: { grantType: 'user_join' },
+						},
+					],
+				},
+			],
+			nextCursor: null,
+		});
 
 		renderOrganizationCreditsContent(undefined, false);
 
-		await screen.findByText('Available');
+		expect(
+			await screen.findByText(
+				(_, element) =>
+					element?.tagName === 'TD' && element.textContent?.trim() === '$5 member join grant Managed User',
+			),
+		).toBeTruthy();
 		expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
 	});
 
