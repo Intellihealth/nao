@@ -57,7 +57,6 @@ export function Sidebar() {
 	const customColor = branding.enabled ? branding.brandColor : null;
 	const { isAdmin, isContextAdmin, isOrgAdmin, isViewer } = usePermissions();
 	const isCloud = useIsCloud();
-	const showProjectSetupCard = isCloud && project.isSuccess && project.data === null && !isViewer;
 	const betaAutomationsEnabled = config.data?.betaAutomationsEnabled === true;
 	const showAutomations = !isViewer && betaAutomationsEnabled;
 	const unreadCount = useUnreadCount(project.data?.id).data ?? 0;
@@ -290,7 +289,7 @@ export function Sidebar() {
 					/>
 				</>
 			)}
-			{(!isInSettings || showProjectSetupCard) && <div className='border-b border-sidebar-border mx-2'></div>}
+			{!isInSettings && <div className='border-b border-sidebar-border mx-2'></div>}
 
 			<div className={cn('mt-auto transition-[padding] duration-300', effectiveIsCollapsed ? 'p-1' : 'p-2')}>
 				{isInSettings && <SidebarCommunity isCollapsed={effectiveIsCollapsed} />}

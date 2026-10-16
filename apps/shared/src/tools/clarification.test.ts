@@ -21,6 +21,6 @@ describe('clarification InputSchema', () => {
 				question: 'Choose a value',
 				options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'],
 			}),
-		).toThrow('Only the database warehouse question may contain more than five options.');
+		).toThrow('Clarification questions may contain at most five options.');
 	});
 });

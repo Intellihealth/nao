@@ -67,18 +67,13 @@ SCALAR_WAREHOUSE_CASES = [
         id="databricks",
     ),
     pytest.param(
-        "duckdb",
-        {"path": "/tmp/analytics.duckdb"},
-        id="duckdb",
-    ),
-    pytest.param(
         "fabric",
         {
             "host": "warehouse.fabric.microsoft.com",
             "database": "analytics",
-            "auth_mode": "sql_password",
-            "user": "nao",
-            "password": "secret",
+            "auth_mode": "azure_service_principal",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
         },
         id="fabric",
     ),
@@ -264,35 +259,100 @@ def test_prepare_nested_bigquery_credentials_round_trip(tmp_path):
     assert loaded_config.databases[0].credentials_json == BIGQUERY_CREDENTIALS_JSON
 
 
-def test_prepare_nested_redshift_ssh_tunnel():
-    ssh_tunnel = {
-        "ssh_host": "bastion.example.com",
-        "ssh_port": 22,
-        "ssh_username": "nao",
-        "ssh_private_key_path": "/run/secrets/redshift-key",
-        "ssh_private_key_passphrase": "key-passphrase",
-    }
+@pytest.mark.parametrize(
+    ("provider", "credentials", "expected_fields"),
+    [
+        pytest.param(
+            "bigquery",
+            {"project_id": "nao-analytics"},
+            ["credentials_json"],
+            id="bigquery-ambient-credentials",
+        ),
+        pytest.param(
+            "bigquery",
+            {"project_id": "nao-analytics", "credentials_path": "/etc/key.json"},
+            ["credentials_json", "credentials_path"],
+            id="bigquery-server-file",
+        ),
+        pytest.param(
+            "athena",
+            {
+                "region_name": "us-east-1",
+                "s3_staging_dir": "s3://nao-results",
+                "profile_name": "default",
+            },
+            ["aws_access_key_id", "aws_secret_access_key", "profile_name"],
+            id="athena-server-profile",
+        ),
+        pytest.param(
+            "motherduck",
+            {"database": "analytics"},
+            ["token"],
+            id="motherduck-env-token",
+        ),
+        pytest.param(
+            "redshift",
+            {
+                "host": "cluster.redshift.amazonaws.com",
+                "database": "analytics",
+                "user": "nao",
+                "password": "secret",
+                "ssh_tunnel": {"ssh_private_key_path": "/root/.ssh/id_rsa"},
+            },
+            ["ssh_tunnel"],
+            id="redshift-server-ssh-key",
+        ),
+        pytest.param(
+            "mssql",
+            {
+                "host": "mssql.example.com",
+                "user": "nao",
+                "password": "secret",
+                "driver": "/tmp/evil.so",
+            },
+            ["driver"],
+            id="mssql-driver-path",
+        ),
+    ],
+)
+def test_prepare_rejects_server_side_credentials(
+    provider, credentials, expected_fields
+):
+    with pytest.raises(ValidationError) as error:
+        prepare_warehouse_config(provider=provider, credentials=credentials)
+
+    assert sorted(issue["loc"][0] for issue in error.value.errors()) == expected_fields
+
+
+def test_prepare_pins_server_independent_auth_mode():
     database_config, env_vars = prepare_warehouse_config(
         provider="redshift",
         credentials={
             "host": "cluster.redshift.amazonaws.com",
             "database": "analytics",
-            "auth_mode": "password",
+            "auth_mode": "iam",
             "user": "nao",
             "password": "secret",
-            "ssh_tunnel": ssh_tunnel,
         },
     )
 
-    tunnel_config = database_config["ssh_tunnel"]
-    assert isinstance(tunnel_config, dict)
+    assert env_vars["NAO_ONBOARDING_REDSHIFT_AUTH_MODE"] == json.dumps("password")
+    assert "auth_mode" in database_config
 
-    for field_name, value in ssh_tunnel.items():
-        env_name = "NAO_ONBOARDING_REDSHIFT_SSH_TUNNEL_" + field_name.upper()
-        assert tunnel_config[field_name] == f"${{{{ env('{env_name}') }}}}"
-        assert env_vars[env_name] == json.dumps(value)
 
-    assert ssh_tunnel["ssh_private_key_passphrase"] not in json.dumps(database_config)
+def test_validate_warehouse_endpoint_rejects_ambient_credentials():
+    response = TestClient(app, headers=INTERNAL_HEADERS).post(
+        "/warehouse/validate",
+        json={"provider": "bigquery", "credentials": {"project_id": "nao-analytics"}},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "code": "invalid_warehouse_credentials",
+            "fields": ["credentials_json"],
+        }
+    }
 
 
 def test_prepare_postgres_warehouse_config_rejects_invalid_credentials():

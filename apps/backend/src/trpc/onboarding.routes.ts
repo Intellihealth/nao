@@ -15,7 +15,10 @@ export const onboardingRoutes = router({
 	validateWarehouseCredentials: protectedProcedure
 		.input(warehouseCredentialsSchema)
 		.output(z.object({ valid: z.literal(true) }))
-		.mutation(({ input }) => validateWarehouseCredentials(input)),
+		.mutation(async ({ ctx, input }) => {
+			await getOrgMembershipOrThrow(ctx.user.id, ctx.selectedOrganizationId);
+			return validateWarehouseCredentials(input);
+		}),
 
 	startWarehouseProvisioning: protectedProcedure
 		.input(warehouseProvisioningInputSchema)
@@ -26,15 +29,7 @@ export const onboardingRoutes = router({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			const membership = await organizationQueries.getUserOrgMembership(ctx.user.id, ctx.selectedOrganizationId);
-
-			if (!membership) {
-				throw new TRPCError({
-					code: 'NOT_FOUND',
-					message: 'You are not a member of an organization',
-				});
-			}
-
+			const membership = await getOrgMembershipOrThrow(ctx.user.id, ctx.selectedOrganizationId);
 			return startWarehouseProvisioning({
 				userId: ctx.user.id,
 				orgId: membership.orgId,
@@ -60,6 +55,17 @@ export const onboardingRoutes = router({
 		.input(z.object({ onboardingChatId: z.uuid() }))
 		.query(({ ctx, input }) => getActiveWarehouseProvisioningJob(ctx.user.id, input.onboardingChatId)),
 });
+
+async function getOrgMembershipOrThrow(userId: string, selectedOrganizationId?: string | null) {
+	const membership = await organizationQueries.getUserOrgMembership(userId, selectedOrganizationId);
+	if (!membership) {
+		throw new TRPCError({
+			code: 'NOT_FOUND',
+			message: 'You are not a member of an organization',
+		});
+	}
+	return membership;
+}
 
 function buildOnboardingProjectName(userName: string): string {
 	const name = userName.trim();

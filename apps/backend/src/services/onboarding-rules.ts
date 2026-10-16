@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import type { generateOnboardingRules as generateOnboardingRulesTool } from '@nao/shared/tools';
 import type { LlmSelectedModel } from '@nao/shared/types';
 import { generateText } from 'ai';
 import * as cheerio from 'cheerio';
 
+import writeContextRulesSkill from '../../../../skills/write-context-rules/SKILL.md' with { type: 'text' };
+import writeContextRulesTemplate from '../../../../skills/write-context-rules/templates/RULES.md' with { type: 'text' };
 import { disableModelReasoning } from '../agents/providers';
 import { llmTelemetry } from '../agents/telemetry';
 import * as projectQueries from '../queries/project.queries';
@@ -38,8 +39,6 @@ export async function generateOnboardingRules(
 
 	const projectContext = readProjectContext(project.path);
 	const additionalContext = await resolveAdditionalContext(businessContext);
-	const writeContextRulesSkill = readBundledRulesFile('SKILL.md');
-	const writeContextRulesTemplate = readBundledRulesFile(path.join('templates', 'RULES.md'));
 	const { text } = await generateText({
 		...disableModelReasoning(modelSelection.provider, llmModel),
 		system: `${writeContextRulesSkill}
@@ -84,19 +83,6 @@ ${writeContextRulesTemplate}`,
 		encoding: 'utf8',
 		mode: 0o600,
 	});
-}
-
-function readBundledRulesFile(relativePath: string): string {
-	const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-	const candidates = [
-		path.resolve(moduleDirectory, '..', '..', '..', '..', 'skills', 'write-context-rules', relativePath),
-		path.resolve(moduleDirectory, '..', '..', '..', 'skills', 'write-context-rules', relativePath),
-	];
-	const filePath = candidates.find((candidate) => fs.existsSync(candidate));
-	if (!filePath) {
-		throw new Error(`Bundled write-context-rules file not found: ${relativePath}`);
-	}
-	return fs.readFileSync(filePath, 'utf8');
 }
 
 async function resolveAdditionalContext(businessContext: BusinessContext): Promise<string> {

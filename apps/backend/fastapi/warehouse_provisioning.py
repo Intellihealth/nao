@@ -1,6 +1,110 @@
 import json
+import re
 
 from nao_core.config.databases import parse_database_config
+from pydantic import ValidationError
+
+ALLOWED_FIELDS = {
+    "athena": {
+        "region_name",
+        "s3_staging_dir",
+        "work_group",
+        "schema_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+    },
+    "bigquery": {"project_id", "dataset_id", "credentials_json", "location"},
+    "clickhouse": {
+        "host",
+        "port",
+        "user",
+        "database",
+        "password",
+        "protocol",
+        "secure",
+    },
+    "databricks": {
+        "schema_name",
+        "server_hostname",
+        "http_path",
+        "access_token",
+        "catalog",
+    },
+    "fabric": {
+        "host",
+        "port",
+        "database",
+        "client_id",
+        "client_secret",
+        "auth_mode",
+        "tenant_id",
+    },
+    "motherduck": {"database", "token"},
+    "mssql": {
+        "host",
+        "port",
+        "user",
+        "database",
+        "password",
+        "schema_name",
+        "driver",
+    },
+    "mysql": {"host", "port", "user", "database", "password", "schema_name"},
+    "postgres": {"host", "port", "user", "database", "password", "schema_name"},
+    "redshift": {
+        "host",
+        "port",
+        "user",
+        "database",
+        "password",
+        "schema_name",
+        "auth_mode",
+        "sslmode",
+    },
+    "snowflake": {
+        "database",
+        "password",
+        "schema_name",
+        "warehouse",
+        "account_id",
+        "username",
+    },
+    "starrocks": {
+        "host",
+        "port",
+        "user",
+        "database",
+        "password",
+        "schema_name",
+        "catalog",
+    },
+    "trino": {
+        "host",
+        "port",
+        "user",
+        "catalog",
+        "http_scheme",
+        "password",
+        "schema_name",
+    },
+}
+
+REQUIRED_SECRET_FIELDS = {
+    "athena": ("aws_access_key_id", "aws_secret_access_key"),
+    "bigquery": ("credentials_json",),
+    "databricks": ("access_token",),
+    "fabric": ("client_id", "client_secret"),
+    "motherduck": ("token",),
+    "snowflake": ("password",),
+}
+
+PINNED_FIELDS = {
+    "fabric": {"auth_mode": "azure_service_principal"},
+    "redshift": {"auth_mode": "password"},
+}
+
+ODBC_DRIVER_NAME_PATTERN = re.compile(r"[A-Za-z0-9 ._-]+")
 
 AUTH_FIELDS = {
     "athena": ["aws_access_key_id", "aws_secret_access_key", "aws_session_token"],
@@ -35,13 +139,47 @@ ENDPOINT_FIELDS = {
 }
 
 
+def sanitize_warehouse_credentials(
+    provider: str,
+    credentials: dict[str, object],
+) -> dict[str, object]:
+    if provider not in ALLOWED_FIELDS:
+        raise ValueError(f"Unsupported warehouse provider: {provider}")
+
+    issues = [
+        {"type": "extra_forbidden", "loc": (field,), "input": None}
+        for field in sorted(credentials.keys() - ALLOWED_FIELDS[provider])
+    ]
+    issues += [
+        {"type": "missing", "loc": (field,), "input": None}
+        for field in REQUIRED_SECRET_FIELDS.get(provider, ())
+        if not credentials.get(field)
+    ]
+    driver = credentials.get("driver")
+    if driver is not None and not (
+        isinstance(driver, str) and ODBC_DRIVER_NAME_PATTERN.fullmatch(driver)
+    ):
+        issues.append(
+            {
+                "type": "value_error",
+                "loc": ("driver",),
+                "input": None,
+                "ctx": {"error": "Invalid ODBC driver name"},
+            }
+        )
+    if issues:
+        raise ValidationError.from_exception_data("WarehouseCredentials", issues)
+
+    return {**credentials, **PINNED_FIELDS.get(provider, {})}
+
+
 def validate_warehouse_credentials(
     provider: str,
     credentials: dict[str, object],
 ) -> None:
     config = parse_database_config(
         {
-            **credentials,
+            **sanitize_warehouse_credentials(provider, credentials),
             "type": provider,
             "name": provider,
         }
@@ -107,7 +245,7 @@ def prepare_warehouse_config(
 ) -> tuple[dict[str, object], dict[str, str]]:
     config = parse_database_config(
         {
-            **credentials,
+            **sanitize_warehouse_credentials(provider, credentials),
             "type": provider,
             "name": provider,
         }

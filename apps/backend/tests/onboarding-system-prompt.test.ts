@@ -41,10 +41,9 @@ describe('onboarding system prompt', () => {
 		const prompt = renderOnboardingSystemPrompt();
 
 		expect(prompt).toContain(
-			'- Options: "Amazon Athena", "BigQuery", "ClickHouse", "Databricks", "DuckDB", "Microsoft Fabric", "MotherDuck", "Microsoft SQL Server / Azure SQL", "MySQL", "Postgres", "Amazon Redshift", "Snowflake", "StarRocks", "Trino", "Other"',
+			'- Options: "Amazon Athena", "BigQuery", "ClickHouse", "Databricks", "DuckDB", "Microsoft Fabric", "MotherDuck", "Microsoft SQL Server / Azure SQL", "MySQL", "Postgres", "Amazon Redshift", "Snowflake", "StarRocks", "Trino"',
 		);
-		expect(prompt).toContain('Respond exactly: "Please tell me which database you are using."');
-		expect(prompt).toContain('Do not call clarification or any other tool');
+		expect(prompt).not.toContain('If the user chooses "Other"');
 		expect(prompt).toContain('Do not invent or guess a provider identifier');
 		expect(prompt).toContain('Do not call request_warehouse_credentials');
 	});
