@@ -2,9 +2,106 @@ import json
 
 from nao_core.config.databases import parse_database_config
 
+AUTH_FIELDS = {
+    "athena": ["aws_access_key_id", "aws_secret_access_key", "aws_session_token"],
+    "bigquery": ["credentials_json"],
+    "clickhouse": ["user", "password"],
+    "databricks": ["access_token"],
+    "fabric": ["client_id", "client_secret", "tenant_id"],
+    "motherduck": ["token"],
+    "mssql": ["user", "password"],
+    "mysql": ["user", "password"],
+    "postgres": ["user", "password"],
+    "redshift": ["user", "password"],
+    "snowflake": ["username", "password"],
+    "starrocks": ["user", "password"],
+    "trino": ["user", "password"],
+}
+
+ENDPOINT_FIELDS = {
+    "athena": ["region_name", "s3_staging_dir"],
+    "bigquery": ["project_id", "location"],
+    "clickhouse": ["host", "port", "protocol"],
+    "databricks": ["server_hostname", "http_path"],
+    "fabric": ["host", "port"],
+    "motherduck": ["database"],
+    "mssql": ["host", "port"],
+    "mysql": ["host", "port"],
+    "postgres": ["host", "port"],
+    "redshift": ["host", "port"],
+    "snowflake": ["account_id"],
+    "starrocks": ["host", "port"],
+    "trino": ["host", "port", "http_scheme"],
+}
+
+
+def validate_warehouse_credentials(
+    provider: str,
+    credentials: dict[str, object],
+) -> None:
+    config = parse_database_config(
+        {
+            **credentials,
+            "type": provider,
+            "name": provider,
+        }
+    )
+    connection = config.connect()
+    try:
+        config.get_schemas(connection)
+    finally:
+        connection.disconnect()
+
+
+def infer_warehouse_error_fields(provider: str, error: Exception) -> list[str]:
+    message = str(error).lower()
+
+    if "dataset" in message:
+        return ["dataset_id"]
+    if "schema" in message:
+        return ["schema_name"]
+    if "catalog" in message:
+        return ["catalog"]
+    if "database" in message and any(
+        phrase in message for phrase in ("does not exist", "not found", "unknown")
+    ):
+        return ["database"]
+    if any(
+        phrase in message
+        for phrase in (
+            "authentication",
+            "access denied",
+            "invalid credential",
+            "invalid_grant",
+            "login failed",
+            "password",
+            "unauthorized",
+            "forbidden",
+            "401",
+            "403",
+            "token",
+        )
+    ):
+        return AUTH_FIELDS.get(provider, [])
+    if any(
+        phrase in message
+        for phrase in (
+            "connection refused",
+            "could not connect",
+            "name or service not known",
+            "network",
+            "no route to host",
+            "timed out",
+            "timeout",
+            "unknown host",
+        )
+    ):
+        return ENDPOINT_FIELDS.get(provider, [])
+
+    return []
+
 
 def prepare_warehouse_config(
-    project_name: str,
     provider: str,
     credentials: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, str]]:
@@ -12,13 +109,13 @@ def prepare_warehouse_config(
         {
             **credentials,
             "type": provider,
-            "name": project_name,
+            "name": provider,
         }
     )
 
     database_config = {
         "type": provider,
-        "name": project_name,
+        "name": provider,
     }
     env_vars: dict[str, str] = {}
     values = config.model_dump(include=config.model_fields_set, mode="json")

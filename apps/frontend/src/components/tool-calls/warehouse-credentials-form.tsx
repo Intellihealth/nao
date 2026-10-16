@@ -1,5 +1,6 @@
 import { useForm } from '@tanstack/react-form';
-import { ShieldCheck } from 'lucide-react';
+import { CircleCheck } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import {
 	getClickHouseDefaultPort,
@@ -11,30 +12,51 @@ import type { WarehouseCredentialsFormValues } from './warehouse-credentials';
 import type { SqlProvider, WarehouseCredentialField } from './warehouse-provider-config';
 
 import { Button } from '@/components/ui/button';
+import { Callout } from '@/components/ui/callout';
 import { Checkbox } from '@/components/ui/checkbox';
-import { FormError, PasswordField, TextareaField, TextField } from '@/components/ui/form-fields';
+import { PasswordField, TextareaField, TextField } from '@/components/ui/form-fields';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface WarehouseCredentialsFormProps {
 	provider: SqlProvider;
+	onValidate: (values: WarehouseCredentialsFormValues) => Promise<void>;
 	onSubmit: (values: WarehouseCredentialsFormValues) => Promise<void>;
 	onCancel: () => void;
+	isValidating: boolean;
 	isPending: boolean;
 	error: { message: string } | null;
+	initialValues?: WarehouseCredentialsFormValues;
+	onValuesChange?: (values: WarehouseCredentialsFormValues) => void;
+	initialValidatedFingerprint?: string | null;
+	onValidatedFingerprintChange?: (fingerprint: string) => void;
 }
 
 export function WarehouseCredentialsForm({
 	provider,
+	onValidate,
 	onSubmit,
 	onCancel,
+	isValidating,
 	isPending,
 	error,
+	initialValues,
+	onValuesChange,
+	initialValidatedFingerprint = null,
+	onValidatedFingerprintChange,
 }: WarehouseCredentialsFormProps) {
+	const [validatedFingerprint, setValidatedFingerprint] = useState<string | null>(initialValidatedFingerprint);
 	const settings = SQL_PROVIDER_SETTINGS[provider];
 	const hasField = (field: WarehouseCredentialField) => providerHasField(provider, field);
 	const form = useForm({
-		defaultValues: getWarehouseCredentialsDefaults(provider),
+		defaultValues: initialValues ?? getWarehouseCredentialsDefaults(provider),
 		onSubmit: async ({ value }) => {
+			const fingerprint = getCredentialsFingerprint(value);
+			if (fingerprint !== validatedFingerprint) {
+				await onValidate(value);
+				setValidatedFingerprint(fingerprint);
+				onValidatedFingerprintChange?.(fingerprint);
+				return;
+			}
 			await onSubmit(value);
 		},
 	});
@@ -52,23 +74,15 @@ export function WarehouseCredentialsForm({
 			}}
 			className='flex flex-col gap-5'
 		>
-			<section className='space-y-3'>
-				<div>
-					<h3 className='text-sm font-medium text-foreground'>Connection profile</h3>
-					<p className='text-xs text-muted-foreground'>Give this connection a recognizable name.</p>
-				</div>
-				<TextField
-					form={form}
-					name='name'
-					label='Name'
-					placeholder='e.g. Production analytics'
-					required={true}
-				/>
-			</section>
+			<form.Subscribe selector={(state) => state.values}>
+				{(values) => <FormValuesObserver values={values} onChange={onValuesChange} />}
+			</form.Subscribe>
 			<section className='space-y-3 rounded-xl border bg-muted/20 p-4'>
 				<div>
 					<h3 className='text-sm font-medium text-foreground'>Connection details</h3>
-					<p className='text-xs text-muted-foreground'>Enter the details provided by {settings.label}.</p>
+					<p className='text-[11px] leading-relaxed text-muted-foreground'>
+						Your credentials are encrypted and securely stored.
+					</p>
 				</div>
 				<div className='grid gap-4 sm:grid-cols-2 [&>*]:min-w-0'>
 					{provider === 'bigquery' && (
@@ -88,7 +102,7 @@ export function WarehouseCredentialsForm({
 								placeholder='Enter your dataset ID'
 								required={false}
 							/>
-							<div className='sm:col-span-2 [&_textarea]:font-sans [&_textarea]:text-sm'>
+							<div className='sm:col-span-2 [&_textarea]:max-h-40 [&_textarea]:field-sizing-fixed [&_textarea]:overflow-y-auto [&_textarea]:font-sans [&_textarea]:text-sm'>
 								<TextareaField
 									form={form}
 									name='serviceAccountJson'
@@ -375,25 +389,68 @@ export function WarehouseCredentialsForm({
 					)}
 				</div>
 			</section>
-			<div className='flex items-start gap-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5'>
-				<ShieldCheck className='mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400' />
-				<p className='text-xs leading-relaxed text-muted-foreground'>
-					Your credentials are encrypted and submitted directly. They are never included in the chat.
-				</p>
-			</div>
-			{error && <FormError error={error.message} />}
-			<div className='flex justify-end gap-2 border-t pt-4'>
-				<Button variant='ghost' size='sm' type='button' onClick={onCancel}>
-					Cancel
-				</Button>
-				<form.Subscribe selector={(state: { canSubmit: boolean }) => state.canSubmit}>
-					{(canSubmit: boolean) => (
-						<Button size='sm' type='submit' disabled={!canSubmit || isPending}>
-							{isPending ? 'Connecting…' : 'Connect'}
-						</Button>
-					)}
-				</form.Subscribe>
-			</div>
+			{error && (
+				<Callout
+					variant='destructive'
+					role='alert'
+					className='items-center rounded-lg border-destructive/15 bg-destructive/5 px-3 py-2.5 text-xs [&>svg]:mt-0'
+				>
+					{error.message}
+				</Callout>
+			)}
+			<form.Subscribe selector={(state) => [state.canSubmit, state.values] as const}>
+				{([canSubmit, values]) => {
+					const credentialsAreValid =
+						validatedFingerprint !== null && validatedFingerprint === getCredentialsFingerprint(values);
+
+					return (
+						<>
+							{credentialsAreValid && (
+								<div className='flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400'>
+									<CircleCheck className='size-4' />
+									<span>Credentials OK!</span>
+								</div>
+							)}
+							<div className='flex justify-end gap-2 border-t pt-4'>
+								<Button variant='ghost' size='sm' type='button' onClick={onCancel}>
+									Cancel
+								</Button>
+								<Button
+									size='sm'
+									type='submit'
+									disabled={!canSubmit || isValidating || isPending}
+									isLoading={isValidating || isPending}
+								>
+									{isValidating
+										? 'Checking…'
+										: isPending
+											? 'Continuing…'
+											: credentialsAreValid
+												? 'Continue'
+												: 'Connect'}
+								</Button>
+							</div>
+						</>
+					);
+				}}
+			</form.Subscribe>
 		</form>
 	);
+}
+
+function getCredentialsFingerprint(values: WarehouseCredentialsFormValues): string {
+	return JSON.stringify(values);
+}
+
+function FormValuesObserver({
+	values,
+	onChange,
+}: {
+	values: WarehouseCredentialsFormValues;
+	onChange?: (values: WarehouseCredentialsFormValues) => void;
+}) {
+	useEffect(() => {
+		onChange?.(values);
+	}, [onChange, values]);
+	return null;
 }

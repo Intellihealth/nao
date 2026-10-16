@@ -13,13 +13,13 @@ export const warehouseCredentialsSchema = z.object({
 });
 
 export const warehouseProvisioningInputSchema = warehouseCredentialsSchema.extend({
-	name: z.string().trim().min(1).max(100),
 	onboardingChatId: z.uuid().optional(),
 });
 
 export const WAREHOUSE_PROVISIONING_STATUSES = [
 	'queued',
 	'initializing',
+	'debugging',
 	'syncing',
 	'registering',
 	'awaiting_context',

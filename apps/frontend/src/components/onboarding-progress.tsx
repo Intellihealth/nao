@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Loader2, Terminal } from 'lucide-react';
 import type { inferRouterOutputs } from '@trpc/server';
 
 import type { TrpcRouter } from '@nao/backend/trpc';
@@ -11,7 +12,7 @@ const ONBOARDING_STEPS = {
 	new: ['Install', 'Initialize', 'Verify & sync', 'Deploy'],
 	local: ['Locate project', 'Verify', 'Sync', 'Deploy'],
 	github: ['Connect GitHub', 'Import repository'],
-	database: ['Connect warehouse', 'Initialize', 'Sync metadata', 'Prepare context'],
+	database: ['Connect warehouse', 'Initialize', 'Verify', 'Sync metadata', 'Prepare context'],
 } as const;
 
 type WarehouseProvisioningStatus =
@@ -20,12 +21,13 @@ type WarehouseProvisioningStatus =
 const DATABASE_COMPLETED_STEPS: Partial<Record<WarehouseProvisioningStatus, number>> = {
 	queued: 1,
 	initializing: 1,
-	syncing: 2,
-	registering: 3,
-	awaiting_context: 3,
-	finalizing: 3,
-	publishing: 3,
-	ready: 4,
+	debugging: 2,
+	syncing: 3,
+	registering: 4,
+	awaiting_context: 4,
+	finalizing: 4,
+	publishing: 4,
+	ready: 5,
 };
 
 export function OnboardingProgress({
@@ -73,6 +75,64 @@ export function OnboardingProgress({
 export function useOnboardingProgress() {
 	const messages = useAgentMessages();
 	return useMemo(() => findLatestProgress(messages), [messages]);
+}
+
+export function WarehouseCommandProgress({
+	status,
+	logs,
+}: {
+	status?: WarehouseProvisioningStatus;
+	logs?: string | null;
+}) {
+	if (status !== 'debugging' && status !== 'syncing') {
+		return null;
+	}
+
+	const isSyncing = status === 'syncing';
+	const syncProgress = isSyncing ? getLatestPercentage(logs) : null;
+	const progress = isSyncing ? (syncProgress ?? 50) : 25;
+	const label = isSyncing ? 'Syncing schema and previews' : 'Checking your warehouse connection';
+
+	return (
+		<div className='rounded-xl border border-violet/20 bg-background/95 px-4 py-3 shadow-sm backdrop-blur'>
+			<div className='flex items-center justify-between gap-3'>
+				<div className='flex min-w-0 items-center gap-2'>
+					<Loader2 className='size-3.5 shrink-0 animate-spin text-violet' />
+					<span className='truncate text-xs font-medium'>{label}</span>
+				</div>
+				<span className='shrink-0 text-[11px] text-muted-foreground'>
+					{syncProgress === null ? 'In progress' : `${syncProgress}%`}
+				</span>
+			</div>
+			<div
+				role='progressbar'
+				aria-label={label}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-valuenow={syncProgress ?? undefined}
+				className='mt-2 h-1.5 overflow-hidden rounded-full bg-muted'
+			>
+				<div
+					className={cn(
+						'h-full rounded-full bg-violet transition-[width] duration-300',
+						!syncProgress && 'animate-pulse',
+					)}
+					style={{ width: `${progress}%` }}
+				/>
+			</div>
+			{logs?.trim() && (
+				<details className='group mt-2'>
+					<summary className='flex cursor-pointer list-none items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground'>
+						<Terminal className='size-3' />
+						View nao {isSyncing ? 'sync' : 'debug'} logs
+					</summary>
+					<pre className='mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground'>
+						{logs}
+					</pre>
+				</details>
+			)}
+		</div>
+	);
 }
 
 export function findWarehouseJobId(messages: UIMessage[]): string | null {
@@ -133,4 +193,10 @@ function findLatestProgress(messages: UIMessage[]): OnboardingProgressState | nu
 		}
 	}
 	return null;
+}
+
+function getLatestPercentage(logs?: string | null): number | null {
+	const matches = [...(logs ?? '').matchAll(/(\d{1,3})%/g)];
+	const percentage = Number(matches.at(-1)?.[1]);
+	return Number.isFinite(percentage) ? Math.min(Math.max(percentage, 0), 100) : null;
 }

@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { CircleAlert, EllipsisVertical, Pencil, StarIcon, StarOffIcon, TrashIcon, Upload } from 'lucide-react';
+import { EllipsisVertical, Pencil, StarIcon, StarOffIcon, TrashIcon, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { ShareChatDialog } from './share-dialog.chat';
 import {
@@ -118,17 +118,10 @@ export function ChatListItem({ chat, needsAttention = false, resumeOnboarding = 
 					!isRenaming && 'hover:pr-9 has-data-[state=open]:pr-9',
 				)}
 				inactiveProps={{
-					className: cn(
-						needsAttention
-							? 'bg-violet/15 text-foreground opacity-100 ring-1 ring-inset ring-violet/40 hover:bg-violet/20'
-							: 'text-sidebar-foreground hover:bg-sidebar-accent opacity-75',
-					),
+					className: 'text-sidebar-foreground hover:bg-sidebar-accent opacity-75',
 				}}
 				activeProps={{
-					className: cn(
-						'text-foreground font-medium',
-						needsAttention ? 'bg-violet/20 ring-1 ring-inset ring-violet/50' : 'bg-sidebar-accent',
-					),
+					className: 'text-foreground bg-sidebar-accent font-medium',
 				}}
 				onClick={(event) => {
 					const isUnmodifiedPrimaryClick =
@@ -152,17 +145,11 @@ export function ChatListItem({ chat, needsAttention = false, resumeOnboarding = 
 				) : (
 					<>
 						{activity.unread && <span className='size-1.5 shrink-0 rounded-full bg-primary' />}
-						{needsAttention && (
-							<CircleAlert
-								className='size-4 shrink-0 text-violet'
-								aria-label='Action needed: answer the setup question'
-							/>
-						)}
 						<div className='truncate text-sm mr-auto'>
 							{chat.isOnboarding ? 'Project setup' : chat.title}
 						</div>
 						{needsAttention ? (
-							<div className='whitespace-nowrap text-xs font-medium text-violet'>Finish setup</div>
+							<div className='whitespace-nowrap text-xs font-medium text-violet'>Almost there!</div>
 						) : activity.running ? (
 							<Spinner className='size-3.5 shrink-0' />
 						) : (

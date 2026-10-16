@@ -18,6 +18,7 @@ type MockWarehouseJob = {
 	businessContext: Record<string, string> | null;
 	modelSelection: Record<string, string> | null;
 	modelProjectId: string | null;
+	logs: string | null;
 	error: string | null;
 	temporaryDirectory: string | null;
 	lockedBy: string | null;
@@ -65,6 +66,7 @@ vi.mock('../src/queries/warehouse-provisioning-job.queries', () => ({
 			businessContext: null,
 			modelSelection: null,
 			modelProjectId: null,
+			logs: null,
 			error: null,
 			temporaryDirectory: null,
 			lockedBy: null,
@@ -196,6 +198,7 @@ import {
 	queueWarehouseFinalization,
 	reconcileWarehouseProvisioningJobs,
 	startWarehouseProvisioning,
+	validateWarehouseCredentials,
 } from '../src/services/warehouse-provisioning';
 import { createNewProject, createTempProjectDir } from '../src/utils/project-import.utils';
 
@@ -213,13 +216,78 @@ afterEach(() => {
 });
 
 describe('warehouse provisioning', () => {
+	it('validates credentials before starting provisioning', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ valid: true }), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' },
+			}),
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		await expect(
+			validateWarehouseCredentials({
+				provider: 'postgres',
+				credentials: { host: 'warehouse.example.com', password: 'secret', schemaName: 'public' },
+			}),
+		).resolves.toEqual({ valid: true });
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining('/warehouse/validate'),
+			expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
+		);
+		expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string).credentials).toMatchObject({
+			schema_name: 'public',
+		});
+	});
+
+	it('returns a safe error when credential validation fails', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 422 })));
+
+		await expect(
+			validateWarehouseCredentials({
+				provider: 'postgres',
+				credentials: { host: 'warehouse.example.com', password: 'wrong' },
+			}),
+		).rejects.toMatchObject({
+			code: 'BAD_REQUEST',
+			message: 'The warehouse rejected these credentials. Check them and try again.',
+		});
+	});
+
+	it('points users to the credentials that need checking', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				Response.json(
+					{
+						detail: {
+							code: 'warehouse_connection_failed',
+							fields: ['user', 'password'],
+						},
+					},
+					{ status: 422 },
+				),
+			),
+		);
+
+		await expect(
+			validateWarehouseCredentials({
+				provider: 'postgres',
+				credentials: { host: 'warehouse.example.com', password: 'wrong' },
+			}),
+		).rejects.toMatchObject({
+			code: 'BAD_REQUEST',
+			message: 'Could not connect. Check Username and Password.',
+		});
+	});
+
 	it('exposes queued job state only to its owner without leaking credentials', async () => {
 		vi.useFakeTimers();
 
 		const { jobId, status } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: {
 				host: 'warehouse.example.com',
@@ -233,9 +301,11 @@ describe('warehouse provisioning', () => {
 		expect(status).toBe('queued');
 		expect(await getWarehouseProvisioningJob(jobId, 'user-1')).toEqual({
 			id: jobId,
+			provider: 'postgres',
 			status: 'queued',
 			projectId: null,
 			projectName: 'analytics',
+			logs: null,
 			error: null,
 		});
 		expect(await getWarehouseProvisioningJob(jobId, 'another-user')).toBeNull();
@@ -247,7 +317,7 @@ describe('warehouse provisioning', () => {
 		const input = {
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres' as const,
 			credentials: { host: 'warehouse.example.com', password: 'secret' },
 		};
@@ -266,7 +336,7 @@ describe('warehouse provisioning', () => {
 		const input = {
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres' as const,
 			credentials: { host: 'warehouse.example.com', password: 'secret' },
 		};
@@ -289,7 +359,7 @@ describe('warehouse provisioning', () => {
 			startWarehouseProvisioning({
 				userId: 'user-1',
 				orgId: 'org-1',
-				name: 'analytics',
+				projectName: 'analytics',
 				provider: 'postgres',
 				credentials: { host: 'warehouse.example.com', password: 'secret' },
 			}),
@@ -309,19 +379,22 @@ describe('warehouse provisioning', () => {
 		});
 		vi.mocked(projectQueries.getProjectById).mockResolvedValue({
 			id: 'project-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			path: registeredProjectDirectory,
 		} as never);
 		vi.mocked(saveProjectWarehouseEnvVars).mockRejectedValue(new Error('Credential storage failed'));
 		vi.mocked(projectQueries.deleteProject).mockResolvedValue();
 		vi.mocked(scheduledJobQueries.deleteJobByUniqueKey).mockResolvedValue();
-		vi.mocked(spawn).mockImplementation(() => {
+		vi.mocked(spawn).mockImplementation((_command, args) => {
 			const child = Object.assign(new EventEmitter(), {
 				stdout: new EventEmitter(),
 				stderr: new EventEmitter(),
 				kill: vi.fn(),
 			});
-			queueMicrotask(() => child.emit('close', 0));
+			queueMicrotask(() => {
+				child.stdout.emit('data', Buffer.from(`Running nao ${args?.[0]}\n`));
+				child.emit('close', 0);
+			});
 			return child as never;
 		});
 		vi.stubGlobal(
@@ -340,7 +413,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: {
 				host: 'warehouse.example.com',
@@ -370,7 +443,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: {
 				host: 'warehouse.example.com',
@@ -414,7 +487,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: {
 				host: 'warehouse.example.com',
@@ -462,7 +535,10 @@ describe('warehouse provisioning', () => {
 					'project_name: analytics\ndatabases:\n  - type: postgres\n    password: super-secret\n',
 				);
 			}
-			queueMicrotask(() => child.emit('close', 0));
+			queueMicrotask(() => {
+				child.stdout.emit('data', Buffer.from(`Running nao ${args?.[0]}\n`));
+				child.emit('close', 0);
+			});
 			return child as never;
 		});
 		vi.stubGlobal(
@@ -484,7 +560,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: { password: 'super-secret' },
 		});
@@ -493,8 +569,19 @@ describe('warehouse provisioning', () => {
 			expect((await getWarehouseProvisioningJob(jobId, 'user-1'))?.status).toBe('awaiting_context');
 		});
 		expect(warehouseJobs.get(jobId)?.attempts).toBe(0);
+		expect(vi.mocked(spawn).mock.calls.map(([, args]) => args)).toEqual([
+			['init', '--yes'],
+			['debug'],
+			['sync', '--provider', 'databases'],
+		]);
+		expect(registeredConfig).toContain('project_name: analytics');
+		expect(registeredConfig).toContain('name: postgres');
+		expect(registeredConfig).toContain('templates:');
+		expect(registeredConfig).toContain('- columns');
+		expect(registeredConfig).toContain('- preview');
 		expect(registeredConfig).toContain("env('NAO_ONBOARDING_POSTGRES_PASSWORD')");
 		expect(registeredConfig).not.toContain('super-secret');
+		expect(warehouseJobs.get(jobId)?.logs).toContain('Running nao sync');
 		fs.rmSync(registeredProjectDirectory, { recursive: true, force: true });
 	});
 
@@ -506,7 +593,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: {
 				host: 'warehouse.example.com',
@@ -536,7 +623,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: {
 				host: 'warehouse.example.com',
@@ -550,7 +637,7 @@ describe('warehouse provisioning', () => {
 		await Promise.all([reconcileWarehouseProvisioningJobs(), reconcileWarehouseProvisioningJobs()]);
 
 		expect((await getWarehouseProvisioningJob(jobId, 'user-1'))?.status).toBe('awaiting_context');
-		expect(spawn).toHaveBeenCalledTimes(2);
+		expect(spawn).toHaveBeenCalledTimes(3);
 		fs.rmSync(registeredProjectDirectory, { recursive: true, force: true });
 	});
 
@@ -560,7 +647,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: { host: 'warehouse.example.com', password: 'secret' },
 		});
@@ -593,7 +680,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: { host: 'warehouse.example.com', password: 'secret' },
 		});
@@ -628,7 +715,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: { host: 'warehouse.example.com', password: 'secret' },
 		});
@@ -644,12 +731,12 @@ describe('warehouse provisioning', () => {
 		});
 		vi.mocked(projectQueries.getProjectById).mockResolvedValue({
 			id: 'owned-project',
-			name: 'analytics',
+			projectName: 'analytics',
 			path: ownedProjectDirectory,
 		} as never);
 		vi.mocked(projectQueries.getProjectByOrgAndName).mockResolvedValue({
 			id: 'other-project',
-			name: 'analytics',
+			projectName: 'analytics',
 			path: otherProjectDirectory,
 		} as never);
 		vi.mocked(projectQueries.deleteProject).mockResolvedValue();
@@ -670,7 +757,7 @@ describe('warehouse provisioning', () => {
 		const { jobId } = await startWarehouseProvisioning({
 			userId: 'user-1',
 			orgId: 'org-1',
-			name: 'analytics',
+			projectName: 'analytics',
 			provider: 'postgres',
 			credentials: {
 				host: 'warehouse.example.com',
@@ -740,7 +827,7 @@ function mockSuccessfulProvisioning(projectId: string): string {
 	});
 	vi.mocked(projectQueries.getProjectById).mockResolvedValue({
 		id: projectId,
-		name: 'analytics',
+		projectName: 'analytics',
 		path: registeredProjectDirectory,
 	} as never);
 	vi.mocked(saveProjectWarehouseEnvVars).mockResolvedValue();
@@ -750,13 +837,16 @@ function mockSuccessfulProvisioning(projectId: string): string {
 		url: 'https://github.com/nao-org/nao-analytics-project',
 		created: true,
 	});
-	vi.mocked(spawn).mockImplementation(() => {
+	vi.mocked(spawn).mockImplementation((_command, args) => {
 		const child = Object.assign(new EventEmitter(), {
 			stdout: new EventEmitter(),
 			stderr: new EventEmitter(),
 			kill: vi.fn(),
 		});
-		queueMicrotask(() => child.emit('close', 0));
+		queueMicrotask(() => {
+			child.stdout.emit('data', Buffer.from(`Running nao ${args?.[0]}\n`));
+			child.emit('close', 0);
+		});
 		return child as never;
 	});
 	vi.stubGlobal(

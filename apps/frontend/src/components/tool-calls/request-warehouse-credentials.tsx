@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Database, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { buildWarehouseCredentials } from './warehouse-credentials';
 import { WarehouseCredentialsForm } from './warehouse-credentials-form';
 import { isSqlProvider, WAREHOUSE_PROVIDER_LABELS } from './warehouse-provider-config';
+import type { WarehouseCredentialsFormValues } from './warehouse-credentials';
 import type { ToolCallComponentProps } from '.';
 
 import { Button } from '@/components/ui/button';
+import { DatabaseIcon } from '@/components/ui/database-icon';
 import {
 	Dialog,
 	DialogContent,
@@ -20,6 +22,7 @@ import { FormError } from '@/components/ui/form-fields';
 import { findWarehouseJobId } from '@/components/onboarding-progress';
 import { useAgentContext, useAgentMessagesSelector } from '@/contexts/agent.provider';
 import { getMessageText, NEW_CHAT_ID, ONBOARDING_CONTEXT_REQUEST_PREFIX } from '@/lib/ai';
+import { cn } from '@/lib/utils';
 import { trpc } from '@/main';
 
 export { WarehouseCredentialsForm as SqlCredentialsForm } from './warehouse-credentials-form';
@@ -31,6 +34,8 @@ export function RequestWarehouseCredentialsToolCall({
 	const [open, setOpen] = useState(false);
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [dialogCenter, setDialogCenter] = useState<number>();
+	const [credentialValues, setCredentialValues] = useState<WarehouseCredentialsFormValues>();
+	const [validatedCredentialFingerprint, setValidatedCredentialFingerprint] = useState<string | null>(null);
 	const cardRef = useRef<HTMLDivElement>(null);
 	const notifiedJobId = useRef<string | null>(null);
 	const restoredJobId = useRef(false);
@@ -58,6 +63,7 @@ export function RequestWarehouseCredentialsToolCall({
 				)
 			: false,
 	);
+	const validateCredentials = useMutation(trpc.onboarding.validateWarehouseCredentials.mutationOptions());
 	const startProvisioning = useMutation(
 		trpc.onboarding.startWarehouseProvisioning.mutationOptions({
 			onSuccess: ({ jobId: nextJobId }) => {
@@ -77,18 +83,25 @@ export function RequestWarehouseCredentialsToolCall({
 		if (canRestoreJob && !activeJob.isFetched) {
 			return;
 		}
-		const restoredId = activeJob.data?.id ?? persistedJobId;
+		const restoredId = activeJob.data && activeJob.data.provider === provider ? activeJob.data.id : persistedJobId;
 		if (restoredJobId.current || !restoredId) {
 			return;
 		}
 		restoredJobId.current = true;
 		setJobId(restoredId);
-	}, [activeJob.data, activeJob.isFetched, canRestoreJob, persistedJobId]);
+	}, [activeJob.data, activeJob.isFetched, canRestoreJob, persistedJobId, provider]);
+
+	useEffect(() => {
+		if (job.data && job.data.provider !== provider) {
+			setJobId(null);
+		}
+	}, [job.data, provider]);
 
 	useEffect(() => {
 		const status = job.data?.status;
 		if (
 			!jobId ||
+			job.data?.provider !== provider ||
 			isRunning ||
 			hasRequestedContext ||
 			(status !== 'syncing' && status !== 'registering' && status !== 'awaiting_context') ||
@@ -107,7 +120,7 @@ export function RequestWarehouseCredentialsToolCall({
 			}
 			console.error(error);
 		});
-	}, [hasRequestedContext, isRunning, job.data?.status, jobId, queueOrSendMessage]);
+	}, [hasRequestedContext, isRunning, job.data?.provider, job.data?.status, jobId, provider, queueOrSendMessage]);
 
 	useEffect(() => {
 		if (!open) {
@@ -123,27 +136,78 @@ export function RequestWarehouseCredentialsToolCall({
 		return null;
 	}
 
+	const setupFailed = job.data?.status === 'failed' || job.data?.status === 'cancelled';
+	const setupInProgress = startProvisioning.isPending || (jobId !== null && !setupFailed);
+	const credentialsVerified =
+		validatedCredentialFingerprint !== null &&
+		credentialValues !== undefined &&
+		validatedCredentialFingerprint === JSON.stringify(credentialValues);
+	const credentialsAccepted = credentialsVerified || setupInProgress;
+
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<div
 				ref={cardRef}
-				className='animate-fade-in-up flex flex-col items-start justify-between gap-4 rounded-xl border border-violet/20 bg-background p-5 shadow-xs sm:flex-row sm:items-center'
+				className={cn(
+					'animate-fade-in-up flex flex-col items-start justify-between gap-4 rounded-xl border bg-background p-5 shadow-xs sm:flex-row sm:items-center',
+					setupFailed
+						? 'border-destructive/20'
+						: credentialsAccepted
+							? 'border-emerald-500/25'
+							: 'border-violet/20',
+				)}
 			>
 				<div className='flex min-w-0 items-center gap-3'>
-					<div className='flex size-10 shrink-0 items-center justify-center rounded-lg border border-violet/20 bg-violet/10 text-primary'>
-						<Database className='size-5' />
+					<div
+						className={cn(
+							'flex size-10 shrink-0 items-center justify-center rounded-lg border',
+							setupFailed
+								? 'border-destructive/20 bg-destructive/5 text-destructive'
+								: credentialsAccepted
+									? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+									: 'border-violet/20 bg-violet/10 text-primary',
+						)}
+					>
+						<DatabaseIcon dialect={provider} className='size-5' />
 					</div>
 					<div className='min-w-0'>
 						<div className='font-borna text-lg font-medium tracking-tight text-foreground'>
-							{WAREHOUSE_PROVIDER_LABELS[provider]} credentials required
+							{setupFailed
+								? `${WAREHOUSE_PROVIDER_LABELS[provider]} setup needs attention`
+								: credentialsAccepted
+									? `${WAREHOUSE_PROVIDER_LABELS[provider]} credentials verified`
+									: `${WAREHOUSE_PROVIDER_LABELS[provider]} credentials required`}
 						</div>
 						<p className='text-xs text-muted-foreground'>
-							Credentials are submitted securely and are never shared with the agent.
+							{setupFailed
+								? 'Open the setup to review the problem and try again.'
+								: setupInProgress
+									? 'Your connection is being set up.'
+									: credentialsVerified
+										? 'Ready to continue. You can still review or edit these details.'
+										: 'Credentials are submitted securely and are never shared with the agent.'}
 						</p>
 					</div>
 				</div>
 				<DialogTrigger asChild>
-					<Button className='w-full shrink-0 rounded-full sm:w-auto'>Enter credentials</Button>
+					<Button
+						variant={credentialsAccepted || setupFailed ? 'outline' : 'default'}
+						className={cn(
+							'w-full shrink-0 rounded-full sm:w-auto',
+							setupFailed &&
+								'border-destructive/25 text-destructive hover:bg-destructive/5 hover:text-destructive',
+							credentialsAccepted &&
+								'border-emerald-500/30 text-emerald-700 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-400',
+						)}
+					>
+						{setupFailed
+							? 'Review setup'
+							: setupInProgress
+								? 'View progress'
+								: credentialsVerified
+									? 'Edit credentials'
+									: 'Enter credentials'}
+					</Button>
 				</DialogTrigger>
 			</div>
 			<DialogContent
@@ -153,7 +217,7 @@ export function RequestWarehouseCredentialsToolCall({
 				<DialogHeader className='pr-8'>
 					<div className='flex items-start gap-3 text-left'>
 						<div className='flex size-10 shrink-0 items-center justify-center rounded-xl bg-violet/15 text-violet'>
-							<Database className='size-5' />
+							<DatabaseIcon dialect={provider} className='size-5' />
 						</div>
 						<div className='space-y-1'>
 							<DialogTitle>Connect {WAREHOUSE_PROVIDER_LABELS[provider]}</DialogTitle>
@@ -172,17 +236,27 @@ export function RequestWarehouseCredentialsToolCall({
 				) : isSqlProvider(provider) ? (
 					<WarehouseCredentialsForm
 						provider={provider}
+						onValidate={async (values) => {
+							await validateCredentials.mutateAsync({
+								provider,
+								credentials: buildWarehouseCredentials(provider, values),
+							});
+						}}
 						onSubmit={async (values) => {
 							await startProvisioning.mutateAsync({
-								name: values.name,
 								provider,
 								credentials: buildWarehouseCredentials(provider, values),
 								...(canRestoreJob && { onboardingChatId: chatId }),
 							});
 						}}
 						onCancel={() => setOpen(false)}
+						isValidating={validateCredentials.isPending}
 						isPending={startProvisioning.isPending}
-						error={startProvisioning.error}
+						error={validateCredentials.error ?? startProvisioning.error}
+						initialValues={credentialValues}
+						onValuesChange={setCredentialValues}
+						initialValidatedFingerprint={validatedCredentialFingerprint}
+						onValidatedFingerprintChange={setValidatedCredentialFingerprint}
 					/>
 				) : (
 					<div className='rounded-xl border bg-muted/30 p-4 text-sm text-muted-foreground'>
@@ -230,6 +304,7 @@ function WarehouseProvisioningProgress({
 	const statusLabel = {
 		queued: 'Preparing warehouse setup…',
 		initializing: 'Initializing your nao project…',
+		debugging: 'Checking your warehouse connection…',
 		syncing: 'Syncing warehouse metadata…',
 		awaiting_context: 'Collecting business context…',
 		finalizing: 'Finalizing your connection…',

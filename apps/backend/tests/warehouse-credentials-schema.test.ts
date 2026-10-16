@@ -31,12 +31,12 @@ describe('warehouse credentials schema', () => {
 		).toBe(false);
 	});
 
-	it('requires a project name when provisioning', () => {
+	it('derives the connection name instead of accepting one from the user', () => {
 		expect(
 			warehouseProvisioningInputSchema.safeParse({
 				provider: 'postgres',
 				credentials: {},
 			}).success,
-		).toBe(false);
+		).toBe(true);
 	});
 });

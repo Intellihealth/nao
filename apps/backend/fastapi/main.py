@@ -1,3 +1,4 @@
+import asyncio
 import math
 import os
 import secrets
@@ -66,7 +67,11 @@ from nao_core.semantic_layer import (  # noqa: E402
     metricflow_dialect_for,
     runtime_manifest_path,
 )
-from warehouse_provisioning import prepare_warehouse_config
+from warehouse_provisioning import (  # noqa: E402
+    infer_warehouse_error_fields,
+    prepare_warehouse_config,
+    validate_warehouse_credentials,
+)
 
 port = int(os.environ.get("PORT", 8005))
 
@@ -149,7 +154,6 @@ class CompileSemanticQueryResponse(BaseModel):
 
 
 class PrepareWarehouseRequest(BaseModel):
-    project_name: str
     provider: str
     credentials: dict[str, object]
 
@@ -157,6 +161,10 @@ class PrepareWarehouseRequest(BaseModel):
 class PrepareWarehouseResponse(BaseModel):
     database_config: dict[str, object]
     env_vars: dict[str, str]
+
+
+class ValidateWarehouseResponse(BaseModel):
+    valid: bool
 
 
 def _validate_sql(
@@ -690,6 +698,41 @@ def _resolve_semantic_layer_database(config: NaoConfig, database_name: str | Non
 
 
 @app.post(
+    "/warehouse/validate",
+    response_model=ValidateWarehouseResponse,
+    dependencies=internal_only,
+)
+async def validate_warehouse(request: PrepareWarehouseRequest):
+    try:
+        await asyncio.to_thread(
+            validate_warehouse_credentials, request.provider, request.credentials
+        )
+        return ValidateWarehouseResponse(valid=True)
+    except ValidationError as error:
+        fields = sorted(
+            {
+                ".".join(str(part) for part in issue["loc"])
+                for issue in error.errors(include_input=False)
+            }
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_warehouse_credentials",
+                "fields": fields,
+            },
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "warehouse_connection_failed",
+                "fields": infer_warehouse_error_fields(request.provider, error),
+            },
+        ) from error
+
+
+@app.post(
     "/warehouse/prepare",
     response_model=PrepareWarehouseResponse,
     dependencies=internal_only,
@@ -697,7 +740,6 @@ def _resolve_semantic_layer_database(config: NaoConfig, database_name: str | Non
 async def prepare_warehouse(request: PrepareWarehouseRequest):
     try:
         database_config, env_vars = prepare_warehouse_config(
-            request.project_name,
             request.provider,
             request.credentials,
         )

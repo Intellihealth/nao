@@ -6,11 +6,17 @@ import {
 	getActiveWarehouseProvisioningJob,
 	getWarehouseProvisioningJob,
 	startWarehouseProvisioning,
+	validateWarehouseCredentials,
 } from '../services/warehouse-provisioning';
-import { warehouseProvisioningInputSchema } from '../types/warehouse';
+import { warehouseCredentialsSchema, warehouseProvisioningInputSchema } from '../types/warehouse';
 import { protectedProcedure, router } from './trpc';
 
 export const onboardingRoutes = router({
+	validateWarehouseCredentials: protectedProcedure
+		.input(warehouseCredentialsSchema)
+		.output(z.object({ valid: z.literal(true) }))
+		.mutation(({ input }) => validateWarehouseCredentials(input)),
+
 	startWarehouseProvisioning: protectedProcedure
 		.input(warehouseProvisioningInputSchema)
 		.output(
@@ -32,6 +38,7 @@ export const onboardingRoutes = router({
 			return startWarehouseProvisioning({
 				userId: ctx.user.id,
 				orgId: membership.orgId,
+				projectName: buildOnboardingProjectName(ctx.user.name),
 				...input,
 			});
 		}),
@@ -53,3 +60,8 @@ export const onboardingRoutes = router({
 		.input(z.object({ onboardingChatId: z.uuid() }))
 		.query(({ ctx, input }) => getActiveWarehouseProvisioningJob(ctx.user.id, input.onboardingChatId)),
 });
+
+function buildOnboardingProjectName(userName: string): string {
+	const name = userName.trim();
+	return name ? `${name}'s project` : 'My project';
+}

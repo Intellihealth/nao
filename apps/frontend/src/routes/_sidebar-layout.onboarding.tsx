@@ -11,6 +11,7 @@ import {
 	isOnboardingComplete,
 	OnboardingProgress,
 	useOnboardingProgress,
+	WarehouseCommandProgress,
 } from '@/components/onboarding-progress';
 import { GitHubRepoPicker } from '@/components/settings/github-repo-picker';
 import { ImportProviderCard } from '@/components/settings/import-provider-card';
@@ -33,6 +34,7 @@ import { ChatIdContext } from '@/hooks/use-chat-id';
 import { useHeight } from '@/hooks/use-height';
 import { usePermissions } from '@/hooks/use-permissions';
 import { setActiveProjectId } from '@/lib/active-project';
+import { NEW_CHAT_ID } from '@/lib/ai';
 import { useSession } from '@/lib/auth-client';
 import { trpc } from '@/main';
 
@@ -72,9 +74,17 @@ function OnboardingRoute() {
 
 function OnboardingPage() {
 	const messages = useAgentMessages();
-	const { isRunning, queueOrSendMessage } = useAgentContext();
+	const { chatId, isRunning, queueOrSendMessage } = useAgentContext();
 	const progress = useOnboardingProgress();
-	const warehouseJobId = useMemo(() => findWarehouseJobId(messages), [messages]);
+	const messageWarehouseJobId = useMemo(() => findWarehouseJobId(messages), [messages]);
+	const canRestoreWarehouseJob = Boolean(chatId && chatId !== NEW_CHAT_ID);
+	const activeWarehouseJob = useQuery({
+		...trpc.onboarding.getActiveWarehouseProvisioningJob.queryOptions({
+			onboardingChatId: canRestoreWarehouseJob ? chatId! : '',
+		}),
+		enabled: canRestoreWarehouseJob,
+	});
+	const warehouseJobId = activeWarehouseJob.data?.id ?? messageWarehouseJobId;
 	const warehouseJob = useWarehouseProvisioningJob(warehouseJobId);
 	const { isOrgAdmin } = usePermissions();
 	const { data: session } = useSession();
@@ -299,7 +309,15 @@ function OnboardingPage() {
 									</p>
 								</div>
 							) : (
-								<ChatInput variant='onboarding' />
+								<>
+									<div className='mx-auto w-full max-w-3xl px-3 pb-2 md:px-4'>
+										<WarehouseCommandProgress
+											status={warehouseJob.data?.status}
+											logs={warehouseJob.data?.logs}
+										/>
+									</div>
+									<ChatInput variant='onboarding' />
+								</>
 							)}
 						</div>
 					</div>
@@ -320,7 +338,7 @@ function OnboardingPage() {
 									Quick question
 								</span>
 								<p className='text-sm leading-relaxed'>
-									Would you like to set up a project or simply connect your database?
+									Would you like to import a project or simply connect your warehouse?
 								</p>
 							</div>
 						</div>
@@ -329,19 +347,19 @@ function OnboardingPage() {
 								variant='outline'
 								size='sm'
 								disabled={isRunning}
-								onClick={() => queueOrSendMessage({ text: 'Set up a project' }).catch(console.error)}
+								onClick={() => queueOrSendMessage({ text: 'Import project' }).catch(console.error)}
 								className='h-auto min-h-7 rounded-2xl py-1'
 							>
-								Set up a project
+								Import project
 							</Button>
 							<Button
 								variant='outline'
 								size='sm'
 								disabled={isRunning}
-								onClick={() => queueOrSendMessage({ text: 'Connect database' }).catch(console.error)}
+								onClick={() => queueOrSendMessage({ text: 'Connect warehouse' }).catch(console.error)}
 								className='h-auto min-h-7 rounded-2xl py-1'
 							>
-								Connect database
+								Connect warehouse
 							</Button>
 						</div>
 						<p className='pl-6 text-xs text-muted-foreground'>

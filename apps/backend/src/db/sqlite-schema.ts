@@ -368,6 +368,7 @@ export const warehouseProvisioningJob = sqliteTable(
 		modelSelection: text('model_selection', { mode: 'json' }).$type<WarehouseProvisioningModelSelection>(),
 		modelProjectId: text('model_project_id'),
 		status: text('status', { enum: WAREHOUSE_PROVISIONING_STATUSES }).notNull().default('queued'),
+		logs: text('logs'),
 		error: text('error'),
 		temporaryDirectory: text('temporary_directory'),
 		lockedBy: text('locked_by'),

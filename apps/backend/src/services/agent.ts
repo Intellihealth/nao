@@ -189,6 +189,7 @@ export const onboardingAgentTools: AgentToolsResolver = ({ agentSettings }) =>
 			onboarding: true,
 			builtinToolAllowlist: [
 				'clarification',
+				'onboarding_agent_prompt',
 				'onboarding_command',
 				'onboarding_progress',
 				'request_warehouse_credentials',

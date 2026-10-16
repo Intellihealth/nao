@@ -6,12 +6,14 @@ from fastapi.testclient import TestClient
 from main import app
 from nao_core.config import NaoConfig
 from pydantic import ValidationError
-from warehouse_provisioning import prepare_warehouse_config
+from warehouse_provisioning import (
+    infer_warehouse_error_fields,
+    prepare_warehouse_config,
+)
 
 INTERNAL_SECRET = "test-internal-secret-at-least-20-characters"
 INTERNAL_HEADERS = {"X-Nao-Internal-Secret": INTERNAL_SECRET}
 POSTGRES_REQUEST = {
-    "project_name": "Analytics",
     "provider": "postgres",
     "credentials": {
         "host": "localhost",
@@ -163,7 +165,6 @@ def internal_secret(monkeypatch):
 
 def test_prepare_postgres_warehouse_config():
     database_config, env_vars = prepare_warehouse_config(
-        project_name="Analytics",
         provider="postgres",
         credentials={
             "host": "localhost",
@@ -177,7 +178,7 @@ def test_prepare_postgres_warehouse_config():
 
     assert database_config == {
         "type": "postgres",
-        "name": "Analytics",
+        "name": "postgres",
         "database": "${{ env('NAO_ONBOARDING_POSTGRES_DATABASE') }}",
         "host": "${{ env('NAO_ONBOARDING_POSTGRES_HOST') }}",
         "password": "${{ env('NAO_ONBOARDING_POSTGRES_PASSWORD') }}",
@@ -190,16 +191,28 @@ def test_prepare_postgres_warehouse_config():
     assert "secret" not in json.dumps(database_config)
 
 
+@pytest.mark.parametrize(
+    ("provider", "message", "expected"),
+    [
+        ("postgres", "password authentication failed", ["user", "password"]),
+        ("postgres", "connection refused", ["host", "port"]),
+        ("bigquery", "invalid_grant", ["credentials_json"]),
+        ("postgres", "unexpected failure", []),
+    ],
+)
+def test_infer_warehouse_error_fields(provider, message, expected):
+    assert infer_warehouse_error_fields(provider, ValueError(message)) == expected
+
+
 @pytest.mark.parametrize(("provider", "credentials"), SCALAR_WAREHOUSE_CASES)
 def test_prepare_scalar_warehouse_config(provider, credentials):
     database_config, env_vars = prepare_warehouse_config(
-        project_name="Analytics",
         provider=provider,
         credentials=credentials,
     )
 
     assert database_config["type"] == provider
-    assert database_config["name"] == "Analytics"
+    assert database_config["name"] == provider
 
     for field_name, value in credentials.items():
         env_name = f"NAO_ONBOARDING_{provider.upper()}_{field_name.upper()}"
@@ -209,7 +222,6 @@ def test_prepare_scalar_warehouse_config(provider, credentials):
 
 def test_prepare_nested_bigquery_credentials():
     database_config, env_vars = prepare_warehouse_config(
-        project_name="Analytics",
         provider="bigquery",
         credentials={
             "project_id": "nao-analytics",
@@ -230,7 +242,6 @@ def test_prepare_nested_bigquery_credentials():
 
 def test_prepare_nested_bigquery_credentials_round_trip(tmp_path):
     database_config, env_vars = prepare_warehouse_config(
-        project_name="Analytics",
         provider="bigquery",
         credentials={
             "project_id": "nao-analytics",
@@ -262,7 +273,6 @@ def test_prepare_nested_redshift_ssh_tunnel():
         "ssh_private_key_passphrase": "key-passphrase",
     }
     database_config, env_vars = prepare_warehouse_config(
-        project_name="Analytics",
         provider="redshift",
         credentials={
             "host": "cluster.redshift.amazonaws.com",
@@ -288,7 +298,6 @@ def test_prepare_nested_redshift_ssh_tunnel():
 def test_prepare_postgres_warehouse_config_rejects_invalid_credentials():
     with pytest.raises(ValidationError):
         prepare_warehouse_config(
-            project_name="Analytics",
             provider="postgres",
             credentials={
                 "database": "analytics",
@@ -302,6 +311,41 @@ def test_prepare_warehouse_endpoint_requires_internal_secret():
     response = TestClient(app).post("/warehouse/prepare", json=POSTGRES_REQUEST)
 
     assert response.status_code == 401
+
+
+def test_validate_warehouse_endpoint_accepts_working_credentials(monkeypatch):
+    monkeypatch.setattr(
+        "main.validate_warehouse_credentials",
+        lambda provider, credentials: None,
+    )
+
+    response = TestClient(app, headers=INTERNAL_HEADERS).post(
+        "/warehouse/validate",
+        json=POSTGRES_REQUEST,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"valid": True}
+
+
+def test_validate_warehouse_endpoint_rejects_invalid_credentials(monkeypatch):
+    def reject_credentials(provider, credentials):
+        raise ValueError("password authentication failed")
+
+    monkeypatch.setattr("main.validate_warehouse_credentials", reject_credentials)
+
+    response = TestClient(app, headers=INTERNAL_HEADERS).post(
+        "/warehouse/validate",
+        json=POSTGRES_REQUEST,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "code": "warehouse_connection_failed",
+            "fields": ["user", "password"],
+        }
+    }
 
 
 def test_prepare_warehouse_endpoint_returns_postgres_config():
@@ -325,7 +369,6 @@ def test_prepare_warehouse_endpoint_redacts_invalid_credentials():
     response = TestClient(app, headers=INTERNAL_HEADERS).post(
         "/warehouse/prepare",
         json={
-            "project_name": "Analytics",
             "provider": "postgres",
             "credentials": {
                 "database": "analytics",

@@ -2,7 +2,6 @@ import { SQL_PROVIDER_SETTINGS } from './warehouse-provider-config';
 import type { SqlProvider } from './warehouse-provider-config';
 
 export interface WarehouseCredentialsFormValues {
-	name: string;
 	host: string;
 	port: string;
 	database: string;
@@ -53,7 +52,6 @@ export function getWarehouseCredentialsDefaults(provider: SqlProvider): Warehous
 	const settings = SQL_PROVIDER_SETTINGS[provider];
 
 	return {
-		name: '',
 		host: 'localhost',
 		port: String(settings.defaultPort),
 		database: provider === 'clickhouse' ? 'default' : '',

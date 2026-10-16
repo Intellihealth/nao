@@ -26,13 +26,14 @@ describe('getCompletedSteps', () => {
 		[undefined, 0],
 		['queued', 1],
 		['initializing', 1],
-		['syncing', 2],
-		['registering', 3],
-		['awaiting_context', 3],
-		['finalizing', 3],
-		['publishing', 3],
-		['ready', 4],
+		['debugging', 2],
+		['syncing', 3],
+		['registering', 4],
+		['awaiting_context', 4],
+		['finalizing', 4],
+		['publishing', 4],
+		['ready', 5],
 	] as const)('tracks database provisioning status %s', (status, expected) => {
-		expect(getCompletedSteps({ flow: 'database', step: 0 }, 4, false, status)).toBe(expected);
+		expect(getCompletedSteps({ flow: 'database', step: 0 }, 5, false, status)).toBe(expected);
 	});
 });

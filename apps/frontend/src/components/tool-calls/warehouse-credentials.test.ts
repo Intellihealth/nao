@@ -10,7 +10,6 @@ import type { WarehouseCredentialsFormValues } from './warehouse-credentials';
 import type { SqlProvider } from './warehouse-provider-config';
 
 const values: WarehouseCredentialsFormValues = {
-	name: 'test-connection',
 	host: 'warehouse.example.com',
 	port: '9999',
 	database: 'analytics',
@@ -236,10 +235,6 @@ describe('buildWarehouseCredentials', () => {
 });
 
 describe('warehouse port defaults', () => {
-	it('leaves the connection name empty', () => {
-		expect(getWarehouseCredentialsDefaults('postgres').name).toBe('');
-	});
-
 	it.each([
 		['http', false, 8123],
 		['http', true, 8443],

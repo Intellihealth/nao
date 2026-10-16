@@ -9,12 +9,10 @@ import type { LlmProvider, LlmSelectedModel } from '@nao/shared/types';
 import { LlmProviderIcon } from '@/components/ui/llm-provider-icon';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useAgentContext } from '@/contexts/agent.provider';
 import { isSameModel, useModelSelection } from '@/hooks/use-model-selection';
 import { usePermissions } from '@/hooks/use-permissions';
 import { getShortcutLabel } from '@/lib/keyboard-shortcuts';
 import { trpc } from '@/main';
-import { useIsCloud } from '@/hooks/use-nao-mode';
 
 /** Listed as an option rather than a link, so that the keyboard reaches it like any other. */
 const MANAGE_MODELS_VALUE = 'manage-models';
@@ -37,9 +35,6 @@ export function ChatInputModelSelect() {
 	const { isTooltipOpen, onTooltipOpenChange, onSelectOpenChange } = useSelectTriggerTooltip();
 
 	const project = useQuery(trpc.project.getCurrent.queryOptions());
-	const isTrial = useIsCloud() && project.data === null;
-
-	const isOnboarding = useAgentContext().mode === 'onboarding';
 
 	// Fall back to the nao default when the pinned model is no longer available
 	useEffect(() => {
@@ -83,7 +78,7 @@ export function ChatInputModelSelect() {
 		return null;
 	}
 
-	if (!availableModels?.length && !isOnboarding && !isTrial) {
+	if (!availableModels?.length) {
 		return (
 			<Link
 				to='/settings/project/models'
@@ -108,24 +103,6 @@ export function ChatInputModelSelect() {
 			{selectedModel && <NamedProviderHint provider={selectedModel.provider} />}
 		</>
 	);
-
-	if (isOnboarding) {
-		return (
-			<div className='flex items-center gap-2 text-sm font-normal text-muted-foreground'>
-				{singleModel}
-				<span className='text-sm'>Onboarding Assistant</span>
-			</div>
-		);
-	}
-
-	if (isTrial && !isOnboarding) {
-		return (
-			<div className='flex items-center gap-2 text-sm font-normal text-muted-foreground'>
-				{singleModel}
-				<span className='text-sm text-muted-foreground'>Trial</span>
-			</div>
-		);
-	}
 
 	if (!canCycleModels) {
 		if (!isAdmin) {

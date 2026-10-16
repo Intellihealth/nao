@@ -25,6 +25,7 @@ import list from './list';
 import loadSkill from './load-skill';
 import { createMcpCallTool } from './mcp-call';
 import { createMcpConnectTool } from './mcp-connect';
+import onboardingAgentPrompt from './onboarding-agent-prompt';
 import onboardingCommand from './onboarding-command';
 import onboardingProgress from './onboarding-progress';
 import read from './read';
@@ -56,6 +57,7 @@ export const tools = {
 	grep,
 	list,
 	load_skill: loadSkill,
+	onboarding_agent_prompt: onboardingAgentPrompt,
 	onboarding_command: onboardingCommand,
 	onboarding_progress: onboardingProgress,
 	request_warehouse_credentials: requestWarehouseCredentials,
@@ -125,6 +127,7 @@ export const getTools = (
 		execute_semantic_query,
 		execute_sql,
 		clarification: clarificationTool,
+		onboarding_agent_prompt: onboardingAgentPromptTool,
 		onboarding_command: onboardingCommandTool,
 		onboarding_progress: onboardingProgressTool,
 		request_warehouse_credentials: requestWarehouseCredentialsTool,
@@ -154,6 +157,7 @@ export const getTools = (
 		...baseTools,
 		clarification: clarificationTool,
 		...(options.onboarding && {
+			onboarding_agent_prompt: onboardingAgentPromptTool,
 			onboarding_command: onboardingCommandTool,
 			onboarding_progress: onboardingProgressTool,
 			request_warehouse_credentials: requestWarehouseCredentialsTool,

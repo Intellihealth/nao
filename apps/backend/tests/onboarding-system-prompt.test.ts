@@ -8,7 +8,23 @@ describe('onboarding system prompt', () => {
 
 		expect(prompt).toContain('Treat the first user message as their answer to that question');
 		expect(prompt).toContain('Do not ask it again');
+		expect(prompt).toContain('Would you like to import a project or simply connect your warehouse?');
 		expect(prompt).not.toContain('Start off all conversations with a clarification');
+	});
+
+	it('offers local-agent setup when the user has no project', () => {
+		const prompt = renderOnboardingSystemPrompt();
+
+		expect(prompt).toContain(
+			'- Options: "Import from GitHub", "Import a local project", "I don\'t have a project yet"',
+		);
+		expect(prompt).toContain('- Options: "Let my local agent do it", "Show me the step-by-step guide"');
+		expect(prompt).toContain('Call onboarding_agent_prompt with this exact multiline prompt');
+		expect(prompt).toContain('ABOUT NAO');
+		expect(prompt).toContain('Read and follow the installed setup-context skill');
+		expect(prompt).toContain('nao deploy <nao-cloud-url> --api-key <deploy-key>');
+		expect(prompt).not.toContain('Give them this exact prompt in a Markdown code block');
+		expect(prompt).toContain('Continue at NEW PROJECT DEPLOYMENT');
 	});
 
 	it('updates progress when the user changes setup flows', () => {
@@ -21,10 +37,12 @@ describe('onboarding system prompt', () => {
 		expect(prompt).toContain('if they clarify that they have not run the deploy command, record step 3');
 	});
 
-	it('offers popular databases first and handles unsupported providers', () => {
+	it('offers all supported databases and handles unsupported providers', () => {
 		const prompt = renderOnboardingSystemPrompt();
 
-		expect(prompt).toContain('- Options: "BigQuery", "Databricks", "Postgres", "Snowflake", "Other"');
+		expect(prompt).toContain(
+			'- Options: "Amazon Athena", "BigQuery", "ClickHouse", "Databricks", "DuckDB", "Microsoft Fabric", "MotherDuck", "Microsoft SQL Server / Azure SQL", "MySQL", "Postgres", "Amazon Redshift", "Snowflake", "StarRocks", "Trino", "Other"',
+		);
 		expect(prompt).toContain('Respond exactly: "Please tell me which database you are using."');
 		expect(prompt).toContain('Do not call clarification or any other tool');
 		expect(prompt).toContain('Do not invent or guess a provider identifier');

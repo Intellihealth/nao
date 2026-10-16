@@ -7,8 +7,6 @@ import {
 	NewspaperIcon,
 	PlusIcon,
 	SearchIcon,
-	OctagonAlert,
-	Wrench,
 	X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
@@ -292,12 +290,6 @@ export function Sidebar() {
 					/>
 				</>
 			)}
-
-			{showProjectSetupCard && locationPath !== '/onboarding' && !effectiveIsCollapsed && (
-				<div className='px-2'>
-					<SidebarProjectSetupCard />
-				</div>
-			)}
 			{(!isInSettings || showProjectSetupCard) && <div className='border-b border-sidebar-border mx-2'></div>}
 
 			<div className={cn('mt-auto transition-[padding] duration-300', effectiveIsCollapsed ? 'p-1' : 'p-2')}>
@@ -325,38 +317,6 @@ export function Sidebar() {
 	}
 
 	return sidebarContent;
-}
-
-function SidebarProjectSetupCard() {
-	const chats = useQuery(trpc.chat.listGrouped.queryOptions({ groupBy: 'none', filters: ['all'] }));
-	const hasStartedOnboarding =
-		chats.data?.groups.some((group) => group.chats.some((chat) => chat.isOnboarding)) ?? false;
-
-	return (
-		<Link
-			to='/onboarding'
-			className={cn(
-				'mb-2 flex min-h-14 w-full items-center justify-center rounded-xl border px-3 py-2.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2',
-				hasStartedOnboarding
-					? 'border-amber-300/60 bg-amber-50/70 hover:border-amber-400/70 hover:bg-amber-100/70 focus-visible:ring-amber-400/40 dark:border-amber-300/20 dark:bg-amber-300/5 dark:hover:border-amber-300/30 dark:hover:bg-amber-300/10'
-					: 'border-violet/30 bg-violet/10 hover:border-violet/40 hover:bg-violet/15 focus-visible:ring-violet/40',
-			)}
-		>
-			<span
-				className={cn(
-					'font-borna flex items-center justify-center gap-2 text-sm font-medium leading-tight',
-					hasStartedOnboarding ? 'text-amber-950 dark:text-amber-100' : 'text-violet',
-				)}
-			>
-				{hasStartedOnboarding ? (
-					<OctagonAlert className={cn('size-4 shrink-0', 'text-amber-600 dark:text-amber-300')} />
-				) : (
-					<Wrench className={cn('size-4 shrink-0', 'text-violet')} />
-				)}
-				{hasStartedOnboarding ? 'Finish setting up your project' : 'Set up your first nao project!'}
-			</span>
-		</Link>
-	);
 }
 
 function SidebarMenuButton({

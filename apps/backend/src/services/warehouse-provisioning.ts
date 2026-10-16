@@ -34,15 +34,24 @@ import { generateOnboardingRules } from './onboarding-rules';
 import { saveProjectWarehouseEnvVars } from './warehouse-credentials';
 
 const INIT_TIMEOUT_MS = 15 * 60_000;
+const DEBUG_TIMEOUT_MS = 5 * 60_000;
 const SYNC_TIMEOUT_MS = 30 * 60_000;
 const COMMAND_OUTPUT_LIMIT = 8000;
+const COMMAND_LOG_UPDATE_MS = 300;
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
 const JOB_LEASE_MS = 5 * 60_000;
 const JOB_HEARTBEAT_MS = 30_000;
 const JOB_RECONCILIATION_MS = 60_000;
 const FAILED_JOB_COOLDOWN_MS = 30_000;
 const MAX_JOB_ATTEMPTS = 5;
 const WORKER_ID = `${os.hostname()}:${process.pid}:${crypto.randomUUID()}`;
-const PROVISIONING_STATUSES: WarehouseProvisioningStatus[] = ['queued', 'initializing', 'syncing', 'registering'];
+const PROVISIONING_STATUSES: WarehouseProvisioningStatus[] = [
+	'queued',
+	'initializing',
+	'debugging',
+	'syncing',
+	'registering',
+];
 const FINALIZATION_STATUSES: WarehouseProvisioningStatus[] = ['finalizing', 'publishing'];
 const RECOVERABLE_STATUSES: WarehouseProvisioningStatus[] = [
 	...PROVISIONING_STATUSES,
@@ -65,14 +74,112 @@ const preparationErrorSchema = z.object({
 	]),
 });
 
+const warehouseValidationErrorSchema = z.object({
+	detail: z.union([
+		z.string(),
+		z.object({
+			code: z.enum(['invalid_warehouse_credentials', 'warehouse_connection_failed']),
+			fields: z.array(z.string()),
+		}),
+	]),
+});
+
+const WAREHOUSE_CREDENTIAL_LABELS: Record<string, string> = {
+	access_token: 'Access Token',
+	account_id: 'Account ID',
+	aws_access_key_id: 'AWS Access Key ID',
+	aws_secret_access_key: 'AWS Secret Access Key',
+	aws_session_token: 'AWS Session Token',
+	catalog: 'Catalog',
+	client_id: 'Client ID',
+	client_secret: 'Client Secret',
+	credentials_json: 'Service Account JSON',
+	database: 'Database Name',
+	dataset_id: 'Dataset ID',
+	host: 'Host',
+	http_path: 'HTTP Path',
+	http_scheme: 'HTTP Scheme',
+	location: 'Location',
+	password: 'Password',
+	port: 'Port',
+	project_id: 'GCP Project ID',
+	protocol: 'Protocol',
+	region_name: 'AWS Region',
+	s3_staging_dir: 'S3 Staging Directory',
+	schema_name: 'Schema Name',
+	server_hostname: 'Server Hostname',
+	tenant_id: 'Tenant ID',
+	token: 'Access Token',
+	user: 'Username',
+	username: 'Username',
+};
+
 const persistedCredentialsSchema = z.object({
 	version: z.literal(1),
 	credentials: warehouseConnectionCredentialsSchema,
 });
 
+const warehouseValidationResponseSchema = z.object({
+	valid: z.literal(true),
+});
+
 class WarehousePreparationError extends Error {}
 
-async function prepareWarehouseConfig(projectName: string, provider: WarehouseProvider, credentials: object) {
+export async function validateWarehouseCredentials(input: ProjectWarehouseCredentials): Promise<{ valid: true }> {
+	const connection = warehouseCredentialsSchema.parse(input);
+	let response: Response;
+	try {
+		response = await fetch(`http://localhost:${env.FASTAPI_PORT}/warehouse/validate`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Nao-Internal-Secret': env.BETTER_AUTH_SECRET,
+			},
+			body: JSON.stringify({
+				provider: connection.provider,
+				credentials: normalizeWarehouseCredentials(connection.provider, connection.credentials),
+			}),
+			signal: AbortSignal.timeout(30_000),
+		});
+	} catch (error) {
+		if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+			throw new TRPCError({
+				code: 'BAD_REQUEST',
+				message: 'The warehouse connection timed out. Check the host and port, then try again.',
+			});
+		}
+		throw error;
+	}
+
+	if (!response.ok) {
+		const body = warehouseValidationErrorSchema.safeParse(await response.json().catch(() => null));
+		const fields =
+			body.success && typeof body.data.detail !== 'string'
+				? [...new Set(body.data.detail.fields.map(getWarehouseCredentialLabel))]
+				: [];
+		throw new TRPCError({
+			code: 'BAD_REQUEST',
+			message:
+				fields.length > 0
+					? `Could not connect. Check ${new Intl.ListFormat('en', { type: 'conjunction' }).format(fields)}.`
+					: 'The warehouse rejected these credentials. Check them and try again.',
+		});
+	}
+
+	return warehouseValidationResponseSchema.parse(await response.json());
+}
+
+function getWarehouseCredentialLabel(fieldPath: string): string {
+	for (const field of fieldPath.split('.')) {
+		const label = WAREHOUSE_CREDENTIAL_LABELS[field];
+		if (label) {
+			return label;
+		}
+	}
+	return fieldPath.split('.').at(-1)?.replaceAll('_', ' ') ?? fieldPath;
+}
+
+async function prepareWarehouseConfig(provider: WarehouseProvider, credentials: object) {
 	const response = await fetch(`http://localhost:${env.FASTAPI_PORT}/warehouse/prepare`, {
 		method: 'POST',
 		headers: {
@@ -80,7 +187,6 @@ async function prepareWarehouseConfig(projectName: string, provider: WarehousePr
 			'X-Nao-Internal-Secret': env.BETTER_AUTH_SECRET,
 		},
 		body: JSON.stringify({
-			project_name: projectName,
 			provider,
 			credentials: normalizeWarehouseCredentials(provider, credentials),
 		}),
@@ -128,7 +234,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type StartWarehouseProvisioningInput = {
 	userId: string;
 	orgId: string;
-	name: string;
+	projectName: string;
 	onboardingChatId?: string;
 } & ProjectWarehouseCredentials;
 
@@ -140,7 +246,7 @@ type WarehouseProvisioningFinalization = {
 
 type PublicWarehouseProvisioningJob = Pick<
 	DBWarehouseProvisioningJob,
-	'id' | 'status' | 'projectId' | 'projectName' | 'error'
+	'id' | 'provider' | 'status' | 'projectId' | 'projectName' | 'logs' | 'error'
 >;
 
 export async function startWarehouseProvisioning(
@@ -156,7 +262,7 @@ export async function startWarehouseProvisioning(
 	const validatedInput: StartWarehouseProvisioningInput = {
 		userId: input.userId,
 		orgId: input.orgId,
-		name: input.name,
+		projectName: input.projectName,
 		...connection,
 	};
 
@@ -173,7 +279,7 @@ export async function startWarehouseProvisioning(
 			id: jobId,
 			userId: input.userId,
 			orgId: input.orgId,
-			projectName: input.name,
+			projectName: input.projectName,
 			onboardingChatId: input.onboardingChatId,
 			provider: connection.provider,
 			encryptedCredentials,
@@ -267,9 +373,11 @@ export async function getActiveWarehouseProvisioningJob(
 function toPublicWarehouseProvisioningJob(job: DBWarehouseProvisioningJob): PublicWarehouseProvisioningJob {
 	return {
 		id: job.id,
+		provider: job.provider,
 		status: job.status,
 		projectId: job.projectId,
 		projectName: job.projectName,
+		logs: job.logs,
 		error: job.error,
 	};
 }
@@ -306,22 +414,33 @@ async function provisionWarehouse(jobId: string, input: StartWarehouseProvisioni
 	try {
 		projectDir = createTempProjectDir('warehouse-onboarding');
 		await updateJob(jobId, { temporaryDirectory: projectDir });
-		const existingProject = await projectQueries.getProjectByOrgAndName(input.orgId, input.name);
+		const existingProject = await projectQueries.getProjectByOrgAndName(input.orgId, input.projectName);
 		if (existingProject) {
-			throw new ProjectNameConflictError(input.name);
+			throw new ProjectNameConflictError(input.projectName);
 		}
 
-		const provisionConfig = await prepareWarehouseConfig(input.name, input.provider, input.credentials);
+		const provisionConfig = await prepareWarehouseConfig(input.provider, input.credentials);
 
 		await updateJob(jobId, { status: 'initializing' });
-		writeWarehouseConfig(projectDir, input.name, provisionConfig.database_config);
+		writeWarehouseConfig(projectDir, input.projectName, input.provider, provisionConfig.database_config);
 		const commandEnvironment = createCommandEnvironment(provisionConfig.env_vars);
 		await runNaoCommand(['init', '--yes'], projectDir, commandEnvironment, INIT_TIMEOUT_MS);
 
-		writeWarehouseConfig(projectDir, input.name, provisionConfig.database_config);
+		writeWarehouseConfig(projectDir, input.projectName, input.provider, provisionConfig.database_config);
 
-		await updateJob(jobId, { status: 'syncing' });
-		await runNaoCommand(['sync', '--provider', 'databases'], projectDir, commandEnvironment, SYNC_TIMEOUT_MS);
+		await updateJob(jobId, { status: 'debugging', logs: '' });
+		await runNaoCommand(['debug'], projectDir, commandEnvironment, DEBUG_TIMEOUT_MS, (logs) =>
+			updateJob(jobId, { logs }),
+		);
+
+		await updateJob(jobId, { status: 'syncing', logs: '' });
+		await runNaoCommand(
+			['sync', '--provider', 'databases'],
+			projectDir,
+			commandEnvironment,
+			SYNC_TIMEOUT_MS,
+			(logs) => updateJob(jobId, { logs }),
+		);
 
 		const projectId = crypto.randomUUID();
 		registeredProjectId = projectId;
@@ -329,7 +448,7 @@ async function provisionWarehouse(jobId: string, input: StartWarehouseProvisioni
 		await updateJob(jobId, { status: 'registering' });
 		const project = await createNewProject({
 			sourceDir: projectDir,
-			projectName: input.name,
+			projectName: input.projectName,
 			orgId: input.orgId,
 			projectId,
 		});
@@ -504,15 +623,15 @@ async function rollbackRegisteredProject(
 	}
 }
 
-function writeWarehouseConfig(projectDir: string, projectName: string, databaseConfig: Record<string, unknown>): void {
+function writeWarehouseConfig(
+	projectDir: string,
+	projectName: string,
+	provider: WarehouseProvider,
+	databaseConfig: Record<string, unknown>,
+): void {
 	const config = yaml.dump({
 		project_name: projectName,
-		databases: [
-			{
-				...databaseConfig,
-				name: projectName,
-			},
-		],
+		databases: [{ ...databaseConfig, name: provider, templates: ['columns', 'preview'] }],
 	});
 
 	fs.writeFileSync(path.join(projectDir, 'nao_config.yaml'), config, { mode: 0o600 });
@@ -535,7 +654,13 @@ function createCommandEnvironment(warehouseEnvVars: Record<string, string>): Nod
 	};
 }
 
-function runNaoCommand(args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<void> {
+function runNaoCommand(
+	args: string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+	timeoutMs: number,
+	onOutput?: (output: string) => Promise<unknown>,
+): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const child = spawn('nao', args, {
 			cwd,
@@ -544,8 +669,35 @@ function runNaoCommand(args: string[], cwd: string, env: NodeJS.ProcessEnv, time
 		});
 		let settled = false;
 		let output = '';
+		let logUpdate: ReturnType<typeof setTimeout> | undefined;
+		let pendingLogUpdate = Promise.resolve<unknown>(undefined);
+		const publishOutput = () => {
+			if (!onOutput) {
+				return;
+			}
+			const visibleOutput = output.replace(ANSI_ESCAPE_PATTERN, '').replaceAll('\r', '\n');
+			pendingLogUpdate = pendingLogUpdate
+				.then(() => onOutput(visibleOutput))
+				.catch((error) =>
+					logger.warn(`Could not publish warehouse command logs: ${String(error)}`, { source: 'system' }),
+				);
+		};
+		const flushOutput = async () => {
+			if (logUpdate) {
+				clearTimeout(logUpdate);
+				logUpdate = undefined;
+			}
+			publishOutput();
+			await pendingLogUpdate;
+		};
 		const captureOutput = (chunk: Buffer) => {
 			output = `${output}${chunk.toString('utf8')}`.slice(-COMMAND_OUTPUT_LIMIT);
+			if (onOutput && !logUpdate) {
+				logUpdate = setTimeout(() => {
+					logUpdate = undefined;
+					publishOutput();
+				}, COMMAND_LOG_UPDATE_MS);
+			}
 		};
 		child.stdout.on('data', captureOutput);
 		child.stderr.on('data', captureOutput);
@@ -555,23 +707,25 @@ function runNaoCommand(args: string[], cwd: string, env: NodeJS.ProcessEnv, time
 			}
 			settled = true;
 			child.kill('SIGTERM');
-			reject(new Error('nao command timed out'));
+			void flushOutput().finally(() => reject(new Error('nao command timed out')));
 		}, timeoutMs);
 
-		child.once('error', (error) => {
+		child.once('error', async (error) => {
 			if (settled) {
 				return;
 			}
 			settled = true;
 			clearTimeout(timeout);
+			await flushOutput();
 			reject(new Error(`Could not start nao ${args[0]}: ${error.message}`));
 		});
-		child.once('close', (code) => {
+		child.once('close', async (code) => {
 			if (settled) {
 				return;
 			}
 			settled = true;
 			clearTimeout(timeout);
+			await flushOutput();
 			if (code === 0) {
 				resolve();
 			} else {
@@ -663,7 +817,7 @@ async function recoverProvisioningJob(jobId: string): Promise<void> {
 			await provisionWarehouse(jobId, {
 				userId: job.userId,
 				orgId: job.orgId,
-				name: job.projectName,
+				projectName: job.projectName,
 				...connection,
 			});
 		} catch (error) {

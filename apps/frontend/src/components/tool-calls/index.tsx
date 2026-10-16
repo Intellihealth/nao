@@ -12,6 +12,7 @@ import { GenerateOnboardingRulesToolCall } from './generate-onboarding-rules';
 import { GrepToolCall } from './grep';
 import { ListToolCall } from './list';
 import { McpToolCall } from './mcp';
+import { OnboardingAgentPromptToolCall } from './onboarding-agent-prompt';
 import { OnboardingCommandToolCall } from './onboarding-command';
 import { QueryAppDbToolCall } from './query-app-db';
 import { ReadToolCall } from './read';
@@ -47,6 +48,7 @@ const toolComponents: Partial<{
 	generate_onboarding_rules: GenerateOnboardingRulesToolCall,
 	grep: GrepToolCall,
 	list: ListToolCall,
+	onboarding_agent_prompt: OnboardingAgentPromptToolCall,
 	onboarding_command: OnboardingCommandToolCall,
 	read: ReadToolCall,
 	read_query_result: ReadQueryResultToolCall,

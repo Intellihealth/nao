@@ -12,6 +12,7 @@ export * as list from './list';
 export * as loadSkill from './load-skill';
 export * as mcpCall from './mcp-call';
 export * as mcpConnect from './mcp-connect';
+export * as onboardingAgentPrompt from './onboarding-agent-prompt';
 export * as onboardingCommand from './onboarding-command';
 export * as onboardingProgress from './onboarding-progress';
 export { QueryIdSchema } from './query-id';
