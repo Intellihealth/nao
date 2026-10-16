@@ -455,20 +455,22 @@ export const startServer = async (opts: { port: number; host: string }) => {
 	registerJob(AUTOMATION_JOB_NAME, automationHandler, { resolveProjectId: resolveAutomationProjectId });
 	registerJob(STORY_REFRESH_JOB_NAME, storyRefreshHandler, { resolveProjectId: resolveStoryRefreshProjectId });
 	registerJob(STORY_DELIVERY_JOB_NAME, storyDeliveryHandler, { resolveProjectId: resolveStoryDeliveryProjectId });
-	if (isCloudBillingEnabled()) {
-		// Process accepted webhooks in the background so Stripe receives an immediate response.
-		registerJob(STRIPE_WEBHOOK_PROCESS_JOB_NAME, stripeWebhookProcessHandler);
-		registerJob(BILLING_LIFECYCLE_JOB_NAME, billingLifecycleHandler);
+	if (isCloud) {
 		registerJob(MANAGED_CREDIT_LIFECYCLE_JOB_NAME, managedCreditLifecycleHandler);
-		await ensureRecurring({
-			name: BILLING_LIFECYCLE_JOB_NAME,
-			cron: '0 * * * *',
-			uniqueKey: BILLING_LIFECYCLE_JOB_NAME,
-		});
 		await ensureRecurring({
 			name: MANAGED_CREDIT_LIFECYCLE_JOB_NAME,
 			cron: '15 * * * *',
 			uniqueKey: MANAGED_CREDIT_LIFECYCLE_JOB_NAME,
+		});
+	}
+	if (isCloudBillingEnabled()) {
+		// Process accepted webhooks in the background so Stripe receives an immediate response.
+		registerJob(STRIPE_WEBHOOK_PROCESS_JOB_NAME, stripeWebhookProcessHandler);
+		registerJob(BILLING_LIFECYCLE_JOB_NAME, billingLifecycleHandler);
+		await ensureRecurring({
+			name: BILLING_LIFECYCLE_JOB_NAME,
+			cron: '0 * * * *',
+			uniqueKey: BILLING_LIFECYCLE_JOB_NAME,
 		});
 	}
 

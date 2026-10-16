@@ -12,7 +12,8 @@ export const Route = createFileRoute('/_sidebar-layout/settings/organization/bil
 				: undefined,
 		portal: search.portal === 'returned' ? search.portal : undefined,
 		creditCheckout:
-			typeof search.creditCheckout === 'string' && search.creditCheckout.length > 0
+			typeof search.creditCheckout === 'string' &&
+			(search.creditCheckout === 'canceled' || search.creditCheckout.startsWith('cs_'))
 				? search.creditCheckout
 				: undefined,
 	}),

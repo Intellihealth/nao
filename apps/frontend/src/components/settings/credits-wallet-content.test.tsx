@@ -226,6 +226,21 @@ describe('credit settings content', () => {
 		expect(screen.queryByRole('button', { name: 'Older' })).toBeNull();
 	});
 
+	it('shows wallet activity without offering top-ups in read-only mode', async () => {
+		mocks.getSummary.mockResolvedValue({
+			balanceMicroUsd: 23_000_000,
+			lifetimeCreditedMicroUsd: 25_000_000,
+			lifetimeDebitedMicroUsd: 2_000_000,
+			enabled: true,
+		});
+		mocks.listLedger.mockResolvedValue({ groups: [], nextCursor: null });
+
+		renderOrganizationCreditsContent(undefined, false);
+
+		await screen.findByText('Available');
+		expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
+	});
+
 	it('shows the platform fee and starts Checkout with the selected USD credits', async () => {
 		mocks.getSummary.mockResolvedValue({
 			balanceMicroUsd: 0,
@@ -246,10 +261,11 @@ describe('credit settings content', () => {
 		expect(amountInput.inputMode).toBe('decimal');
 		expect(screen.queryByText('$', { exact: true })).toBeNull();
 		expect(screen.getByText('$1.00')).toBeTruthy();
+		fireEvent.change(amountInput, { target: { value: '30' } });
 		fireEvent.click(screen.getByRole('button', { name: 'Continue to Stripe' }));
 
 		await waitFor(() => expect(mocks.createCheckout).toHaveBeenCalled());
-		expect(mocks.createCheckout.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ creditAmountCents: 2_000 }));
+		expect(mocks.createCheckout.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ creditAmountCents: 3_000 }));
 	});
 
 	it('confirms the purchase outside the closed credit dialog after returning from Stripe', async () => {
@@ -291,11 +307,11 @@ function usageRun(id: string, statuses: ('completed' | 'failed' | 'aborted')[]) 
 	};
 }
 
-function renderOrganizationCreditsContent(creditCheckout?: string) {
+function renderOrganizationCreditsContent(creditCheckout?: string, canTopUp = true) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={queryClient}>
-			<OrganizationCreditsContent creditCheckout={creditCheckout} />
+			<OrganizationCreditsContent creditCheckout={creditCheckout} canTopUp={canTopUp} />
 		</QueryClientProvider>,
 	);
 }

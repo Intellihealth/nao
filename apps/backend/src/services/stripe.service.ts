@@ -16,6 +16,7 @@ import {
 	isCloudBillingPlanKey,
 	isTerminalBillingStatus,
 } from '../types/billing';
+import { withKeyedLock } from '../utils/keyed-lock';
 
 const STRIPE_API_VERSION: Stripe.LatestApiVersion = '2026-08-26.dahlia';
 const CLOUD_PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -131,6 +132,18 @@ export async function createCloudCustomer(input: {
 }
 
 export async function createCreditTopUpCheckoutSession(input: {
+	creditAmountCents: number;
+	organizationId: string;
+	stripeCustomerId: string;
+	initiatingUserId: string;
+	requestId: string;
+}): Promise<string> {
+	return withKeyedLock(`credit-top-up-checkout:${input.organizationId}`, () =>
+		createLockedCreditTopUpCheckoutSession(input),
+	);
+}
+
+async function createLockedCreditTopUpCheckoutSession(input: {
 	creditAmountCents: number;
 	organizationId: string;
 	stripeCustomerId: string;

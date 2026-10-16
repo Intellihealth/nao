@@ -12,7 +12,6 @@ import {
 import { HandlerError } from '../utils/error';
 import { logger, serializeError } from '../utils/logger';
 import { reconcileCloudBillingCustomer } from './billing-reconciliation.service';
-import { assertOrganizationCloudBillingAccess } from './cloud-billing-access.service';
 import { issueCreditPurchase } from './credit-wallet.service';
 import {
 	createCloudCheckoutSession,
@@ -71,7 +70,6 @@ export async function createCreditTopUpCheckoutForAdmin(
 	input: AdminBillingRequestInput & { creditAmountCents: number },
 ): Promise<string> {
 	const organization = await loadCloudBillingOrganization(input.organizationId);
-	await assertOrganizationCloudBillingAccess(organization.id);
 	const stripeCustomerId = await ensureCloudCustomer(organization, input.userId);
 	return createCreditTopUpCheckoutSession({
 		creditAmountCents: input.creditAmountCents,

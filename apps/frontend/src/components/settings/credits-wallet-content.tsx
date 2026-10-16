@@ -26,9 +26,15 @@ import { trpc } from '@/main';
 type CreditLedgerCursor = { createdAt: Date; id: string };
 type ManagedAiUsageCursor = { startedAt: Date; id: string };
 
-export function OrganizationCreditsContent({ creditCheckout }: { creditCheckout?: string }) {
+export function OrganizationCreditsContent({
+	creditCheckout,
+	canTopUp = true,
+}: {
+	creditCheckout?: string;
+	canTopUp?: boolean;
+}) {
 	const summary = useQuery(trpc.account.getCreditSummary.queryOptions());
-	const topUp = useCreditTopUp(creditCheckout);
+	const topUp = useCreditTopUp(canTopUp ? creditCheckout : undefined);
 	const [topUpAmount, setTopUpAmount] = useState('20');
 	const [ledgerCursor, setLedgerCursor] = useState<CreditLedgerCursor>();
 	const topUpAmountCents = parseUsdCents(topUpAmount);
@@ -48,16 +54,20 @@ export function OrganizationCreditsContent({ creditCheckout }: { creditCheckout?
 							<p className='text-sm text-muted-foreground'>
 								Shared nao credits available across every project in this organization.
 							</p>
-							<CreditTopUpDialog
-								topUp={topUp}
-								topUpAmount={topUpAmount}
-								topUpBreakdown={topUpBreakdown}
-								onTopUpAmountChange={setTopUpAmount}
-							/>
+							{canTopUp && (
+								<CreditTopUpDialog
+									topUp={topUp}
+									topUpAmount={topUpAmount}
+									topUpBreakdown={topUpBreakdown}
+									onTopUpAmountChange={setTopUpAmount}
+								/>
+							)}
 						</div>
-						{topUp.feedback && (
+						{canTopUp && topUp.feedback && (
 							<div className='mb-3 flex items-center justify-between gap-3'>
-								<p className='text-sm'>{topUp.feedback}</p>
+								<p className='text-sm' role='status' aria-live='polite'>
+									{topUp.feedback}
+								</p>
 								{topUp.showRetry && (
 									<Button variant='outline' size='sm' onClick={topUp.retryConfirmation}>
 										Check again

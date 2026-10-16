@@ -388,6 +388,37 @@ describe('cloud Checkout', () => {
 		expect(stripeMocks.expireCheckoutSession).not.toHaveBeenCalled();
 	});
 
+	it('serializes concurrent credit Checkout creation for an organization', async () => {
+		const sessions: Stripe.Checkout.Session[] = [];
+		stripeMocks.listCheckoutSessions.mockImplementation(() => paginatedList(sessions));
+		stripeMocks.createCheckoutSession.mockImplementation((params: Stripe.Checkout.SessionCreateParams) => {
+			const session = {
+				id: 'cs_created',
+				mode: 'payment',
+				status: 'open',
+				url: 'https://checkout.stripe.com/created-credits',
+				metadata: params.metadata,
+			} as Stripe.Checkout.Session;
+			sessions.push(session);
+			return session;
+		});
+
+		const createSession = (requestId: string) =>
+			createCreditTopUpCheckoutSession({
+				creditAmountCents: 2_000,
+				organizationId: 'org-id',
+				stripeCustomerId: 'cus_cloud',
+				initiatingUserId: 'user-id',
+				requestId,
+			});
+
+		await expect(Promise.all([createSession('request-1'), createSession('request-2')])).resolves.toEqual([
+			'https://checkout.stripe.com/created-credits',
+			'https://checkout.stripe.com/created-credits',
+		]);
+		expect(stripeMocks.createCheckoutSession).toHaveBeenCalledOnce();
+	});
+
 	it('expires a superseded credit Checkout before creating another', async () => {
 		stripeMocks.listCheckoutSessions.mockReturnValue(
 			paginatedList([

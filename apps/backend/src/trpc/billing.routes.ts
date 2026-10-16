@@ -185,12 +185,16 @@ export const billingRoutes = {
 	getCreditTopUpStatus: cloudBillingAdminProcedure
 		.input(z.object({ checkoutSessionId: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
-			const credited = await confirmCreditTopUpForAdmin({
-				userId: ctx.user.id,
-				organizationId: ctx.organization.id,
-				checkoutSessionId: input.checkoutSessionId,
-			});
-			return { credited };
+			try {
+				const credited = await confirmCreditTopUpForAdmin({
+					userId: ctx.user.id,
+					organizationId: ctx.organization.id,
+					checkoutSessionId: input.checkoutSessionId,
+				});
+				return { credited };
+			} catch (error) {
+				throwBillingFailure('credit top-up confirmation', 'Unable to confirm credit Checkout', error);
+			}
 		}),
 
 	getInvoices: cloudBillingAdminProcedure.query(async ({ ctx }) => {

@@ -122,7 +122,7 @@ export function UsageFilters({
 					onChange={onSelectedUserNamesChange}
 				/>
 			)}
-			{showUserControls && onSplitByUserChange && (
+			{showUsageControls && showUserControls && onSplitByUserChange && (
 				<ToggleFilter
 					label='Split per user'
 					icon={Split}

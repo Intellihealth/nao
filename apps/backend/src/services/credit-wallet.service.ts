@@ -292,9 +292,6 @@ export async function setCreditPurchaseMovement(input: CreditPurchaseMovement): 
 					input.movementGroupId,
 					input.targetDeltaMicroUsd,
 				);
-				if (deltaMicroUsd === 0) {
-					return false;
-				}
 				const entry = transaction
 					.insert(s.creditLedger)
 					.values(creditPurchaseMovementEntry(wallet, input, deltaMicroUsd))
@@ -369,9 +366,6 @@ export async function setCreditPurchaseMovement(input: CreditPurchaseMovement): 
 			input.movementGroupId,
 			input.targetDeltaMicroUsd,
 		);
-		if (deltaMicroUsd === 0) {
-			return false;
-		}
 		const [entry] = await transaction
 			.insert(s.creditLedger)
 			.values(creditPurchaseMovementEntry(wallet, input, deltaMicroUsd))
@@ -815,18 +809,49 @@ function calculatePurchaseMovementDelta(
 	movementGroupId: string,
 	targetDeltaMicroUsd: number,
 ): number {
-	const currentGroupDelta = linkedEntries
-		.filter((entry) => entry.metadata?.movementGroupId === movementGroupId)
-		.reduce((total, entry) => total + entry.deltaMicroUsd, 0);
-	const requestedDelta = targetDeltaMicroUsd - currentGroupDelta;
-	if (requestedDelta >= 0) {
-		return Math.min(requestedDelta, -Math.min(0, currentGroupDelta));
+	const movementGroups = new Map<
+		string,
+		{
+			appliedDeltaMicroUsd: number;
+			targetDeltaMicroUsd?: number;
+			targetSequence: number;
+		}
+	>();
+	for (const entry of linkedEntries) {
+		const entryMovementGroupId = entry.metadata?.movementGroupId;
+		if (typeof entryMovementGroupId !== 'string') {
+			continue;
+		}
+		const movementGroup = movementGroups.get(entryMovementGroupId) ?? {
+			appliedDeltaMicroUsd: 0,
+			targetSequence: -1,
+		};
+		movementGroup.appliedDeltaMicroUsd += entry.deltaMicroUsd;
+		const recordedTarget = entry.metadata?.movementTargetDeltaMicroUsd;
+		if (
+			typeof recordedTarget === 'number' &&
+			Number.isSafeInteger(recordedTarget) &&
+			recordedTarget <= 0 &&
+			entry.transactionSequence > movementGroup.targetSequence
+		) {
+			movementGroup.targetDeltaMicroUsd = recordedTarget;
+			movementGroup.targetSequence = entry.transactionSequence;
+		}
+		movementGroups.set(entryMovementGroupId, movementGroup);
 	}
-	const remainingPurchasedCredit = Math.max(
-		0,
-		purchaseMicroUsd + linkedEntries.reduce((total, entry) => total + entry.deltaMicroUsd, 0),
+	const desiredGroupDeltas = new Map(
+		[...movementGroups].map(([groupId, group]) => [
+			groupId,
+			group.targetDeltaMicroUsd ?? group.appliedDeltaMicroUsd,
+		]),
 	);
-	return Math.max(requestedDelta, -remainingPurchasedCredit);
+	desiredGroupDeltas.set(movementGroupId, targetDeltaMicroUsd);
+	const aggregateTargetDelta = Math.max(
+		-purchaseMicroUsd,
+		[...desiredGroupDeltas.values()].reduce((total, delta) => total + delta, 0),
+	);
+	const currentAggregateDelta = linkedEntries.reduce((total, entry) => total + entry.deltaMicroUsd, 0);
+	return aggregateTargetDelta - currentAggregateDelta;
 }
 
 function creditPurchaseMovementEntry(wallet: DBCreditWallet, input: CreditPurchaseMovement, deltaMicroUsd: number) {
@@ -839,10 +864,11 @@ function creditPurchaseMovementEntry(wallet: DBCreditWallet, input: CreditPurcha
 		idempotencyKey: input.idempotencyKey,
 		externalReference: input.externalReference,
 		metadata: {
+			...input.metadata,
 			source: 'stripe',
 			purchasePaymentIntentId: input.paymentIntentId,
 			movementGroupId: input.movementGroupId,
-			...input.metadata,
+			movementTargetDeltaMicroUsd: input.targetDeltaMicroUsd,
 		},
 	};
 }

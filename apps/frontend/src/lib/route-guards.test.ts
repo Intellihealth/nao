@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { requireUsageOrManagedAiAccess } from './route-guards';
+import { requireOrganizationAdminCloud, requireUsageOrManagedAiAccess } from './route-guards';
 
 const mocks = vi.hoisted(() => ({
 	ensureQueryData: vi.fn(),
@@ -46,4 +46,17 @@ describe('requireUsageOrManagedAiAccess', () => {
 			expect(mocks.ensureQueryData).toHaveBeenCalledTimes(2);
 		},
 	);
+});
+
+describe('requireOrganizationAdminCloud', () => {
+	beforeEach(() => {
+		mocks.ensureQueryData.mockReset();
+	});
+
+	it('allows a cloud organization admin when billing is disabled', async () => {
+		const config = { naoMode: 'cloud', cloudBillingEnabled: false };
+		mocks.ensureQueryData.mockResolvedValueOnce(config).mockResolvedValueOnce({ role: 'admin' });
+
+		await expect(requireOrganizationAdminCloud()).resolves.toBe(config);
+	});
 });

@@ -515,7 +515,7 @@ describe('managed AI usage and organization credits', () => {
 		expect(before.balanceMicroUsd - after.balanceMicroUsd).toBe(100);
 	});
 
-	it('credits a Stripe purchase once and caps linked refund and dispute movements', async () => {
+	it('credits a Stripe purchase once and preserves suppressed movement targets', async () => {
 		const checkoutSessionId = `cs_${crypto.randomUUID()}`;
 		const paymentIntentId = `pi_${crypto.randomUUID()}`;
 		const purchase = {
@@ -539,21 +539,21 @@ describe('managed AI usage and organization credits', () => {
 		expect(
 			await setCreditPurchaseMovement({
 				paymentIntentId,
-				movementGroupId: 'refund:ch_purchase',
-				targetDeltaMicroUsd: -10_000_000,
-				idempotencyKey: 'refund:ch_purchase:1050',
-				externalReference: 'ch_purchase',
-				entryType: 'refund',
-			}),
-		).toBe(true);
-		expect(
-			await setCreditPurchaseMovement({
-				paymentIntentId,
 				movementGroupId: 'dispute:dp_purchase',
 				targetDeltaMicroUsd: -20_000_000,
 				idempotencyKey: 'dispute:dp_purchase:needs_response',
 				externalReference: 'dp_purchase',
 				entryType: 'adjustment',
+			}),
+		).toBe(true);
+		expect(
+			await setCreditPurchaseMovement({
+				paymentIntentId,
+				movementGroupId: 'refund:ch_purchase',
+				targetDeltaMicroUsd: -10_000_000,
+				idempotencyKey: 'refund:ch_purchase:1050',
+				externalReference: 'ch_purchase',
+				entryType: 'refund',
 			}),
 		).toBe(true);
 		expect((await getCreditSummary(POOL_ORG_ID)).balanceMicroUsd).toBe(before.balanceMicroUsd);

@@ -24,25 +24,32 @@ export function useCreditTopUp(creditCheckout: string | undefined) {
 	);
 
 	useEffect(() => {
-		if (!isPolling) {
+		setIsPolling(Boolean(checkoutSessionId));
+	}, [checkoutSessionId]);
+
+	useEffect(() => {
+		if (!status.data?.credited) {
 			return;
 		}
-		if (status.data?.credited) {
-			setIsPolling(false);
-			void Promise.all([
-				queryClient.invalidateQueries({ queryKey: trpc.account.getManagedCreditStatus.queryKey() }),
-				queryClient.invalidateQueries({ queryKey: trpc.account.getCreditSummary.queryKey() }),
-				queryClient.invalidateQueries({ queryKey: trpc.account.listCreditLedger.queryKey() }),
-				queryClient.invalidateQueries({ queryKey: trpc.account.listManagedAiUsage.queryKey() }),
-				queryClient.invalidateQueries({ queryKey: trpc.project.listAvailableTranscribeModels.queryKey() }),
-				queryClient.invalidateQueries({ queryKey: trpc.project.getDefaultChatModel.queryKey() }),
-				queryClient.invalidateQueries({ queryKey: trpc.billing.getInvoices.queryKey() }),
-			]);
+		setIsPolling(false);
+		void Promise.all([
+			queryClient.invalidateQueries({ queryKey: trpc.account.getManagedCreditStatus.queryKey() }),
+			queryClient.invalidateQueries({ queryKey: trpc.account.getCreditSummary.queryKey() }),
+			queryClient.invalidateQueries({ queryKey: trpc.account.listCreditLedger.queryKey() }),
+			queryClient.invalidateQueries({ queryKey: trpc.account.listManagedAiUsage.queryKey() }),
+			queryClient.invalidateQueries({ queryKey: trpc.project.listAvailableTranscribeModels.queryKey() }),
+			queryClient.invalidateQueries({ queryKey: trpc.project.getDefaultChatModel.queryKey() }),
+			queryClient.invalidateQueries({ queryKey: trpc.billing.getInvoices.queryKey() }),
+		]);
+	}, [queryClient, status.data?.credited]);
+
+	useEffect(() => {
+		if (!isPolling || status.data?.credited) {
 			return;
 		}
 		const timeout = window.setTimeout(() => setIsPolling(false), CONFIRMATION_TIMEOUT_MS);
 		return () => window.clearTimeout(timeout);
-	}, [isPolling, queryClient, status.data?.credited]);
+	}, [checkoutSessionId, isPolling, status.data?.credited]);
 
 	const feedback =
 		creditCheckout === 'canceled'

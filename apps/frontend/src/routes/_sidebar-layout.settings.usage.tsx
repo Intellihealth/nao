@@ -130,7 +130,7 @@ function UsagePage() {
 			<div className='shrink-0 px-4 pt-4 md:px-8 md:pt-8'>
 				<h1 className='text-lg font-semibold text-foreground'>Usage & Costs</h1>
 				<p className='text-sm text-muted-foreground'>
-					{getTabDescription(activeTab, activeTab === 'managed-ai' ? isOrgAdmin : canViewAllUsage)}
+					{getTabDescription(activeTab, activeTab === 'managed-ai' ? isOrgAdmin : canViewChatReplay)}
 				</p>
 				<TabBar
 					tabs={availableTabs.map((tab) => ({ id: tab, label: usageTabLabels[tab] }))}
@@ -384,7 +384,7 @@ function UsageOverview({
 						</div>
 						<ChatsReplayPage
 							search={search}
-							selectedUserNames={users}
+							selectedUserNames={canViewAllUsage ? users : undefined}
 							selectedFeedbackStates={feedback}
 							selectedToolStates={tools}
 							selectedSources={sources}
