@@ -1,7 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod/v4';
 
-import * as organizationQueries from '../queries/organization.queries';
 import {
 	getActiveWarehouseProvisioningJob,
 	getWarehouseProvisioningJob,
@@ -9,18 +8,15 @@ import {
 	validateWarehouseCredentials,
 } from '../services/warehouse-provisioning';
 import { warehouseCredentialsSchema, warehouseProvisioningInputSchema } from '../types/warehouse';
-import { protectedProcedure, router } from './trpc';
+import { organizationProtectedProcedure, protectedProcedure, router } from './trpc';
 
 export const onboardingRoutes = router({
-	validateWarehouseCredentials: protectedProcedure
+	validateWarehouseCredentials: organizationProtectedProcedure
 		.input(warehouseCredentialsSchema)
 		.output(z.object({ valid: z.literal(true) }))
-		.mutation(async ({ ctx, input }) => {
-			await getOrgMembershipOrThrow(ctx.user.id, ctx.selectedOrganizationId);
-			return validateWarehouseCredentials(input);
-		}),
+		.mutation(({ input }) => validateWarehouseCredentials(input)),
 
-	startWarehouseProvisioning: protectedProcedure
+	startWarehouseProvisioning: organizationProtectedProcedure
 		.input(warehouseProvisioningInputSchema)
 		.output(
 			z.object({
@@ -28,15 +24,14 @@ export const onboardingRoutes = router({
 				status: z.literal('queued'),
 			}),
 		)
-		.mutation(async ({ ctx, input }) => {
-			const membership = await getOrgMembershipOrThrow(ctx.user.id, ctx.selectedOrganizationId);
-			return startWarehouseProvisioning({
+		.mutation(({ ctx, input }) =>
+			startWarehouseProvisioning({
 				userId: ctx.user.id,
-				orgId: membership.orgId,
+				orgId: ctx.organization.id,
 				projectName: buildOnboardingProjectName(ctx.user.name),
 				...input,
-			});
-		}),
+			}),
+		),
 
 	getWarehouseProvisioningStatus: protectedProcedure
 		.input(z.object({ jobId: z.uuid() }))
@@ -55,17 +50,6 @@ export const onboardingRoutes = router({
 		.input(z.object({ onboardingChatId: z.uuid() }))
 		.query(({ ctx, input }) => getActiveWarehouseProvisioningJob(ctx.user.id, input.onboardingChatId)),
 });
-
-async function getOrgMembershipOrThrow(userId: string, selectedOrganizationId?: string | null) {
-	const membership = await organizationQueries.getUserOrgMembership(userId, selectedOrganizationId);
-	if (!membership) {
-		throw new TRPCError({
-			code: 'NOT_FOUND',
-			message: 'You are not a member of an organization',
-		});
-	}
-	return membership;
-}
 
 function buildOnboardingProjectName(userName: string): string {
 	const name = userName.trim();

@@ -49,7 +49,15 @@ const warehouseClarificationSchema = z.object({
 export const InputSchema = z
 	.union([warehouseClarificationSchema, standardClarificationSchema])
 	.superRefine(({ options, question }, context) => {
-		if (question !== DATABASE_WAREHOUSE_QUESTION || !options) {
+		if (question !== DATABASE_WAREHOUSE_QUESTION) {
+			return;
+		}
+		if (!options) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ['options'],
+				message: 'The database warehouse question must use the complete supported option list.',
+			});
 			return;
 		}
 		const warehouseOptions = new Set<string>(DATABASE_WAREHOUSE_OPTIONS);

@@ -164,7 +164,7 @@ def sanitize_warehouse_credentials(
                 "type": "value_error",
                 "loc": ("driver",),
                 "input": None,
-                "ctx": {"error": "Invalid ODBC driver name"},
+                "ctx": {"error": ValueError("Invalid ODBC driver name")},
             }
         )
     if issues:
