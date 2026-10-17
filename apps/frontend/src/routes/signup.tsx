@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react';
 import { signUp } from '@/lib/auth-client';
 import { AuthForm, FormTextField } from '@/components/auth-form';
 import { rememberSignInMethod } from '@/lib/last-sign-in-method';
+import { DatahubSignInNotice } from '@/components/datahub-sign-in-notice';
+import { useDatahubAuth } from '@/hooks/use-datahub-auth';
 import { getSafeRedirectPath } from '@/lib/safe-redirect';
 import { trpc } from '@/main';
 
@@ -17,6 +19,7 @@ export const Route = createFileRoute('/signup')({
 });
 
 function SignUp() {
+	const datahubAuth = useDatahubAuth();
 	const navigate = useNavigate();
 	const router = useRouter();
 	const { error: oauthError, redirect } = Route.useSearch();
@@ -44,6 +47,9 @@ function SignUp() {
 	});
 
 	useEffect(() => {
+		if (datahubAuth) {
+			return;
+		}
 		if (config.data && !isUserSignupEnabled) {
 			navigate({
 				to: '/login',
@@ -51,7 +57,11 @@ function SignUp() {
 				replace: true,
 			});
 		}
-	}, [config.data, isUserSignupEnabled, navigate, safeRedirect]);
+	}, [config.data, datahubAuth, isUserSignupEnabled, navigate, safeRedirect]);
+
+	if (datahubAuth) {
+		return <DatahubSignInNotice />;
+	}
 
 	if (config.isLoading) {
 		return null;

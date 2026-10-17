@@ -9,6 +9,8 @@ export const systemRoutes = {
 		cloudBillingEnabled: isCloudBillingEnabled(),
 		enableUserLogin: env.ENABLE_USER_LOGIN,
 		enableUserSignup: await isUserSignupAvailable(),
+		datahubAuth: Boolean(env.DATAHUB_FRONTEND_URL),
+		datahubAgent: Boolean(env.AGENT_RUNTIME_ARN),
 		betaAutomationsEnabled: env.BETA_AUTOMATIONS_ENABLED,
 		betaContextRecommendationsEnabled: env.BETA_CONTEXT_RECOMMENDATIONS_ENABLED,
 		betaStoryFiltersEnabled: env.BETA_STORY_FILTERS_ENABLED,

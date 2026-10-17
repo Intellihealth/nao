@@ -1,5 +1,7 @@
 import { App } from '../app';
 import { getAuth } from '../auth';
+import { sessionFromDataHub } from '../datahub-session';
+import { env } from '../env';
 import { convertHeaders } from '../utils/utils';
 
 function serializeBody(body: unknown, contentType: string | undefined): string | undefined {
@@ -22,6 +24,12 @@ export const authRoutes = async (app: App) => {
 				const url = new URL(request.url, `http://${request.headers.host}`);
 
 				const headers = convertHeaders(request.headers);
+				if (env.DATAHUB_FRONTEND_URL && url.pathname.endsWith('/auth/get-session')) {
+					const session = await sessionFromDataHub(headers);
+					reply.type('application/json');
+					reply.send(session ? { session: session.session, user: session.user } : null);
+					return;
+				}
 				// Create Fetch API-compatible request
 				const req = new Request(url.toString(), {
 					method: request.method,

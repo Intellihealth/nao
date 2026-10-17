@@ -11,6 +11,7 @@ import { STORY_RUNTIME_SOURCES, storyRuntime } from './vite/story-runtime-plugin
 
 // https://vitejs.dev/config/
 export default defineConfig({
+	base: process.env.VITE_BASE_PATH || '/',
 	plugins: [
 		devtools({
 			enhancedLogs: {

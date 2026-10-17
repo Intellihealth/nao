@@ -6,6 +6,8 @@ import { signIn } from '@/lib/auth-client';
 import { AuthForm, FormTextField } from '@/components/auth-form';
 import { useIsCloud } from '@/hooks/use-nao-mode';
 import { rememberSignInMethod } from '@/lib/last-sign-in-method';
+import { DatahubSignInNotice } from '@/components/datahub-sign-in-notice';
+import { useDatahubAuth } from '@/hooks/use-datahub-auth';
 import { getSafeRedirectPath } from '@/lib/safe-redirect';
 import { trpc } from '@/main';
 
@@ -26,6 +28,7 @@ function buildOAuthAuthorizeUrl() {
 }
 
 function Login() {
+	const datahubAuth = useDatahubAuth();
 	const navigate = useNavigate();
 	const router = useRouter();
 	const { error: oauthError, redirect } = Route.useSearch();
@@ -61,6 +64,14 @@ function Login() {
 			});
 		},
 	});
+
+	if (config.isLoading) {
+		return null;
+	}
+
+	if (datahubAuth) {
+		return <DatahubSignInNotice />;
+	}
 
 	return (
 		<AuthForm

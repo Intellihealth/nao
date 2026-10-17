@@ -2,7 +2,10 @@ import { oauthProviderClient } from '@better-auth/oauth-provider/client';
 import { genericOAuthClient, inferAdditionalFields } from 'better-auth/client/plugins';
 import { createAuthClient } from 'better-auth/react';
 
+import { naoBase } from '@/lib/base-path';
+
 export const authClient = createAuthClient({
+	basePath: `${naoBase}/api/auth`,
 	plugins: [
 		oauthProviderClient(),
 		inferAdditionalFields({
