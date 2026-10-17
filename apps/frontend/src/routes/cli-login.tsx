@@ -2,6 +2,9 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useMutation } from '@tanstack/react-query';
 import { CheckCircle2, TerminalSquare, XCircle } from 'lucide-react';
 
+import { DatahubSignInNotice } from '@/components/datahub-sign-in-notice';
+import { withBase } from '@/lib/base-path';
+import { useDatahubAuth } from '@/hooks/use-datahub-auth';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorMessage } from '@/components/ui/error-message';
@@ -31,6 +34,7 @@ function buildCallbackUrl(port: number, params: Record<string, string>): string 
 }
 
 function CliLogin() {
+	const datahubAuth = useDatahubAuth();
 	const { port, state } = Route.useSearch();
 	const callbackPort = parseCallbackPort(port);
 
@@ -43,7 +47,7 @@ function CliLogin() {
 				window.location.href = buildCallbackUrl(callbackPort, { error: 'access_denied', state });
 				return;
 			}
-			const response = await fetch('/api/cli-auth/authorize', {
+			const response = await fetch(withBase('/api/cli-auth/authorize'), {
 				method: 'POST',
 				credentials: 'include',
 			});
@@ -54,6 +58,10 @@ function CliLogin() {
 			window.location.href = buildCallbackUrl(callbackPort, { code, state });
 		},
 	});
+
+	if (datahubAuth) {
+		return <DatahubSignInNotice />;
+	}
 
 	if (!callbackPort || !state) {
 		return (

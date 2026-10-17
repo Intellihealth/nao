@@ -11,10 +11,10 @@ import type { UseChatHelpers } from '@ai-sdk/react';
 import type { UIMessage } from '@nao/backend/chat';
 import type { ImageUploadData } from '@nao/shared/attachments';
 import type { CitationData, LlmSelectedModel } from '@nao/shared/types';
-import type { DocumentAttachment } from '@/lib/attachments';
 import type { FileUIPart, InferUIMessageChunk } from 'ai';
 import type { MentionOption } from 'prompt-mentions';
 
+import type { DocumentAttachment } from '@/lib/attachments';
 import { getActiveProjectId } from '@/lib/active-project';
 import {
 	checkIsAgentRunning,
@@ -29,6 +29,7 @@ import {
 	parseBudgetError,
 	resolveImagesFromMessage,
 } from '@/lib/ai';
+import { withBase } from '@/lib/base-path';
 import { createLocalStorage } from '@/lib/local-storage';
 import { trpc } from '@/main';
 import { useChatQuery, useSetChat } from '@/queries/use-chat-query';
@@ -179,7 +180,7 @@ export const useAgent = ({ disableNavigation = false }: { disableNavigation?: bo
 
 		const newAgent = new Agent<UIMessage>({
 			transport: new DefaultChatTransport({
-				api: '/api/agent',
+				api: withBase('/api/agent'),
 				prepareSendMessagesRequest: ({ body, messages }) => {
 					const messageToSend = messages.at(-1);
 					if (!messageToSend) {

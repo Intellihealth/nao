@@ -12,6 +12,7 @@ import { ThemeProvider } from './contexts/theme.provider';
 import { McpProvider } from './contexts/mcp';
 import { TooltipProvider } from './components/ui/tooltip';
 import { getActiveOrganizationId } from './lib/active-organization';
+import { naoBase, withBase } from './lib/base-path';
 import { createActiveOrganizationRecovery } from './lib/active-organization-recovery';
 import { getActiveProjectId } from './lib/active-project';
 import { routeTree } from './routeTree.gen';
@@ -32,6 +33,7 @@ declare module '@tanstack/react-router' {
 // Create a new router instance
 const router = createRouter({
 	routeTree,
+	basepath: naoBase || '/',
 	context: {},
 	defaultPreload: 'intent',
 	scrollRestoration: true,
@@ -60,7 +62,7 @@ export const trpcClient = createTRPCClient<TrpcRouter>({
 		loggerLink(),
 		activeOrganizationRecovery.link,
 		httpBatchLink({
-			url: '/api/trpc',
+			url: withBase('/api/trpc'),
 			transformer: superjson,
 			headers({ opList }) {
 				const activeProjectId = getActiveProjectId();

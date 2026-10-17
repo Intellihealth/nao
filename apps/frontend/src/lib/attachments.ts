@@ -1,4 +1,5 @@
 import { getActiveProjectId } from '@/lib/active-project';
+import { withBase } from '@/lib/base-path';
 import { triggerDownload } from '@/lib/download';
 
 export interface DocumentAttachment {
@@ -21,7 +22,7 @@ export async function uploadAttachment(file: File): Promise<UploadedAttachmentIn
 	body.append('file', file, file.name);
 
 	const projectId = getActiveProjectId();
-	const response = await fetch('/api/attachments', {
+	const response = await fetch(withBase('/api/attachments'), {
 		method: 'POST',
 		body,
 		headers: projectId ? { 'x-nao-project-id': projectId } : undefined,

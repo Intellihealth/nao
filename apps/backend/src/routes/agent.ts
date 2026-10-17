@@ -2,7 +2,9 @@ import { JsonToSseTransformStream, UI_MESSAGE_STREAM_HEADERS } from 'ai';
 import type { IncomingHttpHeaders } from 'http';
 
 import type { App } from '../app';
+import { env } from '../env';
 import { handleAgentRoute } from '../handlers/agent';
+import { handleDataHubSqlAgentRoute } from '../handlers/datahub-sql-agent';
 import { authMiddleware } from '../middleware/auth';
 import * as chatQueries from '../queries/chat.queries';
 import * as projectQueries from '../queries/project.queries';
@@ -32,14 +34,21 @@ export const agentRoutes = async (app: App) => {
 			await assertProjectCloudBillingAccess(projectId);
 		}
 
-		const result = await handleAgentRoute({
-			userId: user.id,
-			projectId,
-			...body,
-			billingAccessVerifiedProjectId: projectId,
-			adminMode: body.adminMode && canChatWithNaoData,
-			domainHost: getDomainHost(headers),
-		});
+		const result = env.AGENT_RUNTIME_ARN
+			? await handleDataHubSqlAgentRoute({
+					userId: user.id,
+					userEmail: user.email,
+					projectId,
+					...body,
+				})
+			: await handleAgentRoute({
+					userId: user.id,
+					projectId,
+					...body,
+					billingAccessVerifiedProjectId: projectId,
+					adminMode: body.adminMode && canChatWithNaoData,
+					domainHost: getDomainHost(headers),
+				});
 
 		let stream = withQueryResultPreviewsInStream(result.stream);
 

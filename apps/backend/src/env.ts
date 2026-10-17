@@ -174,6 +174,9 @@ const baseRawEnvSchema = z.object({
 		.optional()
 		.default('false')
 		.transform((val) => val === 'true'),
+	DATAHUB_FRONTEND_URL: z.string().optional(),
+	AGENT_RUNTIME_ARN: z.string().optional(),
+	AWS_REGION: z.string().optional(),
 
 	DEFAULT_USER_ROLE: z.enum(['admin', 'user', 'viewer']).default('user'),
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
-
 import type { AnalyticsAssetType } from '@nao/shared/types';
+
+import { withBase } from '@/lib/base-path';
 
 interface TrackViewDurationOptions {
 	assetType: AnalyticsAssetType;
@@ -105,7 +106,10 @@ export function useTrackViewDuration({
 				startedAt: segmentStartedAt.current ?? Date.now(),
 			});
 
-			navigator.sendBeacon('/api/analytics/view-duration', new Blob([payload], { type: 'application/json' }));
+			navigator.sendBeacon(
+				withBase('/api/analytics/view-duration'),
+				new Blob([payload], { type: 'application/json' }),
+			);
 
 			accumulatedMs.current = 0;
 			segmentStartedAt.current = null;

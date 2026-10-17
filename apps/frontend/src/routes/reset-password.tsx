@@ -3,6 +3,8 @@ import { useForm } from '@tanstack/react-form';
 import { useState } from 'react';
 import { resetPassword } from '@/lib/auth-client';
 import { AuthForm, FormTextField } from '@/components/auth-form';
+import { DatahubSignInNotice } from '@/components/datahub-sign-in-notice';
+import { useDatahubAuth } from '@/hooks/use-datahub-auth';
 import { useRedirectIfSmtpNotSetup } from '@/hooks/useRedirectIfSmtpNotSetup';
 
 export const Route = createFileRoute('/reset-password')({
@@ -14,6 +16,7 @@ export const Route = createFileRoute('/reset-password')({
 });
 
 function ResetPassword() {
+	const datahubAuth = useDatahubAuth();
 	const isPending = useRedirectIfSmtpNotSetup();
 	const navigate = useNavigate();
 	const { token, error: tokenError } = Route.useSearch();
@@ -35,6 +38,10 @@ function ResetPassword() {
 			}
 		},
 	});
+
+	if (datahubAuth) {
+		return <DatahubSignInNotice />;
+	}
 
 	if (isPending) {
 		return null;

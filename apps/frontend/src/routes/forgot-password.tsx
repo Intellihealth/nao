@@ -3,6 +3,8 @@ import { useForm } from '@tanstack/react-form';
 import { useState } from 'react';
 import { requestPasswordReset } from '@/lib/auth-client';
 import { AuthForm, FormTextField } from '@/components/auth-form';
+import { DatahubSignInNotice } from '@/components/datahub-sign-in-notice';
+import { useDatahubAuth } from '@/hooks/use-datahub-auth';
 import { useRedirectIfSmtpNotSetup } from '@/hooks/useRedirectIfSmtpNotSetup';
 
 export const Route = createFileRoute('/forgot-password')({
@@ -10,6 +12,7 @@ export const Route = createFileRoute('/forgot-password')({
 });
 
 function ForgotPassword() {
+	const datahubAuth = useDatahubAuth();
 	const isPending = useRedirectIfSmtpNotSetup();
 	const [submitted, setSubmitted] = useState(false);
 	const [serverError, setServerError] = useState<string | undefined>();
@@ -29,6 +32,10 @@ function ForgotPassword() {
 			}
 		},
 	});
+
+	if (datahubAuth) {
+		return <DatahubSignInNotice />;
+	}
 
 	if (isPending) {
 		return null;

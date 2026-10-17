@@ -12,6 +12,7 @@ import { jwt } from 'better-auth/plugins';
 import { bearer } from 'better-auth/plugins/bearer';
 import type { JWTPayload } from 'jose';
 
+import { sessionFromDataHub } from './datahub-session';
 import { db } from './db/db';
 import dbConfig, { Dialect } from './db/dbConfig';
 import { env, isCloud, MCP_VALID_AUDIENCES } from './env';
@@ -49,6 +50,10 @@ export const getAuth = async () => {
 };
 
 export const getSession = async (headers: Headers) => {
+	if (env.DATAHUB_FRONTEND_URL) {
+		return sessionFromDataHub(headers);
+	}
+
 	const auth = await getAuth();
 	const session = await auth.api.getSession({ headers });
 	if (!session?.session || !(await shouldExpireSsoSession(session.session))) {

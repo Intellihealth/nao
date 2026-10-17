@@ -6,6 +6,7 @@ import type { LlmProvider, LlmSelectedModel } from '@nao/shared/types';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { LlmProviderIcon } from '@/components/ui/llm-provider-icon';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { usePublicConfig } from '@/hooks/use-datahub-auth';
 import { usePermissions } from '@/hooks/use-permissions';
 import { isSameModel, useModelSelection } from '@/hooks/use-model-selection';
 import { getShortcutLabel } from '@/lib/keyboard-shortcuts';
@@ -18,6 +19,7 @@ const NAO_DEFAULT_LABEL = 'Auto';
 
 export function ChatInputModelSelect() {
 	const navigate = useNavigate();
+	const config = usePublicConfig();
 	const { isAdmin } = usePermissions();
 	const {
 		availableModels,
@@ -68,8 +70,12 @@ export function ChatInputModelSelect() {
 	const selectedModelName = usesDefaultModel ? NAO_DEFAULT_LABEL : (resolvedModelName ?? 'Select model');
 	const selectValue = usesDefaultModel ? NAO_DEFAULT_VALUE : selectedModel ? modelValue(selectedModel) : undefined;
 
-	if (isPending) {
+	if (config.isPending || isPending) {
 		return null;
+	}
+
+	if (config.data?.datahubAgent) {
+		return <div className='flex items-center gap-2 text-sm font-normal text-muted-foreground'>DataHub agent</div>;
 	}
 
 	if (!availableModels?.length) {
