@@ -51,7 +51,7 @@
 		"@ai-sdk/openai-compatible": "^2.0.63",
 		"@aws-sdk/client-s3": "^3.1102.0",
 		"@aws-sdk/credential-providers": "^3.1030.0",
-		"@azure/identity": "^4.13.0",
+		"@azure/identity": "^4.14.1",
 		"@babel/parser": "^7.29.9",
 		"@babel/types": "^7.29.8",
 		"@better-auth/core": "1.6.30",
